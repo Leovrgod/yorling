@@ -1,0 +1,13 @@
+# __YORLING_MARKER__
+name: yorling-island
+version: 1.0.0
+description: Forward Hermes Agent plugin hooks to Yorling Island
+provides_hooks:
+  - on_session_start
+  - pre_llm_call
+  - pre_tool_call
+  - post_tool_call
+  - post_llm_call
+  - on_session_end
+  - on_session_finalize
+  - on_session_reset

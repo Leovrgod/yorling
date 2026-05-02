@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Build
+dist/
+target/
+src-tauri/target/
+.tmp-tests/
+.tmp-analysis/
+src-tauri/binaries/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Local agent/editor state
+.gstack/
+.github/hooks/
+**/.github/hooks/
+src-tauri/.github/
+
+# Mobile client build output
+mobile/**/node_modules/
+mobile/**/.expo/
+mobile/**/android/.gradle/
+mobile/**/android/.kotlin/
+mobile/**/android/build/
+mobile/**/android/app/build/
+mobile/**/android/app/.cxx/
+
+# Local scratch assets
+应用图标/
+*.log

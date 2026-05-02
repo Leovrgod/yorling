@@ -1,0 +1,11 @@
+[package]
+name = "yorling-platform-macos"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+yorling-core = { path = "../yorling-core" }
+yorling-engine = { path = "../yorling-engine" }
+core-foundation = "0.10"
+log = "0.4"

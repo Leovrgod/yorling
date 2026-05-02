@@ -1,0 +1,18 @@
+[package]
+name = "yorling-island-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "yorling-bridge"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "net", "io-util", "macros", "time"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

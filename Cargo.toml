@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/yorling-core",
+    "crates/yorling-engine",
+    "crates/yorling-platform-macos",
+    "crates/yorling-island-core",
+    "crates/yorling-island-bridge",
+    "src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"

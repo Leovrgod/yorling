@@ -1,0 +1,9 @@
+[package]
+name = "yorling-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+yorling-core = { path = "../yorling-core" }
+log = "0.4"

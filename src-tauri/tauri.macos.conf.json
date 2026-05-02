@@ -1,0 +1,15 @@
+{
+  "build": {
+    "beforeBundleCommand": "pnpm build:finder-sync"
+  },
+  "app": {
+    "macOSPrivateApi": true
+  },
+  "bundle": {
+    "macOS": {
+      "files": {
+        "PlugIns/YorlingFinderSync.appex": "target/finder-sync/YorlingFinderSync.appex"
+      }
+    }
+  }
+}
