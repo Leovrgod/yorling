@@ -10,6 +10,7 @@
     "dev:macos-app": "bash scripts/dev-macos-app.sh",
     "build": "tsc && vite build",
     "build:finder-sync": "bash src-tauri/macos/YorlingFinderSync/build.sh",
+    "release:macos": "bash scripts/release-macos.sh",
     "test": "node tests/run-tests.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
