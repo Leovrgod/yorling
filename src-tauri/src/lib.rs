@@ -6,6 +6,7 @@ mod island;
 use commands::clipboard::ClipboardState;
 use commands::keyboard::InterceptorState;
 use commands::super_right_click::SuperRightClickState;
+use commands::updater::AppUpdaterState;
 use island::IslandState;
 use std::sync::{
     Arc,
@@ -162,6 +163,7 @@ pub fn run() {
     let island_state = Arc::new(IslandState::new());
     let clipboard_state = Arc::new(ClipboardState::new());
     let super_right_click_state = Arc::new(SuperRightClickState::new());
+    let updater_state = AppUpdaterState::default();
     let suppress_ready_presentation_for_finder_action = Arc::new(AtomicBool::new(false));
     let suppress_ready_presentation_for_setup =
         suppress_ready_presentation_for_finder_action.clone();
@@ -174,7 +176,16 @@ pub fn run() {
         .manage(island_state.clone())
         .manage(clipboard_state.clone())
         .manage(super_right_click_state)
+        .manage(updater_state)
         .setup(move |app| {
+            #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+            if let Err(error) = app
+                .handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())
+            {
+                log::warn!("Failed to initialize updater plugin: {error}");
+            }
+
             #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
             if let Err(error) = app.handle().plugin(tauri_plugin_autostart::init(
                 tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -292,6 +303,8 @@ pub fn run() {
             commands::terminal::send_embedded_terminal_input,
             commands::terminal::resize_embedded_terminal,
             commands::terminal::stop_embedded_terminal,
+            commands::updater::check_app_update,
+            commands::updater::install_app_update,
         ])
         .on_window_event(|window, event| {
             // Prevent app from fully quitting when window is closed —

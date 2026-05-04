@@ -58,6 +58,15 @@ type UiCopy = {
     autoLaunchUnavailable: string;
     enableAutoLaunch: string;
     disableAutoLaunch: string;
+    updateLabel: string;
+    checkForUpdates: string;
+    checkingForUpdates: string;
+    installUpdate: string;
+    installingUpdate: string;
+    upToDate: string;
+    updateNotConfigured: string;
+    updateRetry: string;
+    updateAvailableTitle: (version: string) => string;
   };
   sidebar: {
     modules: Record<ModuleName, string>;
@@ -303,6 +312,15 @@ const UI_COPY: Record<AppLanguageId, UiCopy> = {
       autoLaunchUnavailable: '不可用',
       enableAutoLaunch: '开启开机自启',
       disableAutoLaunch: '关闭开机自启',
+      updateLabel: '更新',
+      checkForUpdates: '检查更新',
+      checkingForUpdates: '检查中',
+      installUpdate: '安装更新',
+      installingUpdate: '安装中',
+      upToDate: '已最新',
+      updateNotConfigured: '未配置',
+      updateRetry: '重试更新',
+      updateAvailableTitle: (version) => `发现 Yorling ${version}，点击安装`,
     },
     sidebar: {
       modules: MODULE_LABELS.zh,
@@ -546,6 +564,15 @@ const UI_COPY: Record<AppLanguageId, UiCopy> = {
       autoLaunchUnavailable: 'Unavailable',
       enableAutoLaunch: 'Enable launch at login',
       disableAutoLaunch: 'Disable launch at login',
+      updateLabel: 'Update',
+      checkForUpdates: 'Check for updates',
+      checkingForUpdates: 'Checking',
+      installUpdate: 'Install update',
+      installingUpdate: 'Installing',
+      upToDate: 'Current',
+      updateNotConfigured: 'Setup needed',
+      updateRetry: 'Retry update',
+      updateAvailableTitle: (version) => `Yorling ${version} is available. Click to install.`,
     },
     sidebar: {
       modules: MODULE_LABELS.en,

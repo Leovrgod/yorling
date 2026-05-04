@@ -587,6 +587,23 @@ impl AltTabWindowSnapshotCache {
         self.updated_at = Some(Instant::now());
     }
 
+    pub fn promote_window_to_front(&mut self, window_id: u32) -> bool {
+        let Some(index) = self
+            .windows
+            .iter()
+            .position(|window| window.id == window_id)
+        else {
+            return false;
+        };
+
+        if index > 0 {
+            let window = self.windows.remove(index);
+            self.windows.insert(0, window);
+        }
+        self.updated_at = Some(Instant::now());
+        true
+    }
+
     pub fn windows(&self) -> Vec<AltTabWindow> {
         self.windows.clone()
     }
@@ -929,7 +946,12 @@ mod platform {
                     );
                 }
                 AltTabCommand::System(SystemAction::AltTabCommit) => {
-                    handle_commit(&session, &overlay_state, &app_handle);
+                    handle_commit(
+                        &session,
+                        &overlay_state,
+                        &app_handle,
+                        &window_snapshot_cache,
+                    );
                 }
                 AltTabCommand::System(SystemAction::AltTabCancel) => {
                     handle_cancel(&session, &overlay_state, &app_handle);
@@ -958,7 +980,13 @@ mod platform {
                     handle_hovered_window(&session, &overlay_state, &app_handle, window_id);
                 }
                 AltTabCommand::ActivateWindow { window_id } => {
-                    handle_activate_window(&session, &overlay_state, &app_handle, window_id);
+                    handle_activate_window(
+                        &session,
+                        &overlay_state,
+                        &app_handle,
+                        &window_snapshot_cache,
+                        window_id,
+                    );
                 }
             }
         }
@@ -1322,6 +1350,7 @@ mod platform {
         session: &Arc<Mutex<AltTabSession>>,
         overlay_state: &Arc<Mutex<AltTabOverlayState>>,
         app_handle: &Arc<Mutex<Option<AppHandle>>>,
+        window_snapshot_cache: &Arc<Mutex<AltTabWindowSnapshotCache>>,
     ) {
         let (selected, next_state) = {
             let mut session = session.lock().unwrap();
@@ -1333,6 +1362,10 @@ mod platform {
         hide_overlay_window(app_handle);
 
         if let Some(window) = selected {
+            window_snapshot_cache
+                .lock()
+                .unwrap()
+                .promote_window_to_front(window.id);
             if let Err(error) = focus_window(&window) {
                 log::warn!(
                     "Failed to focus Alt+Tab target window {}: {}",
@@ -1396,6 +1429,7 @@ mod platform {
         session: &Arc<Mutex<AltTabSession>>,
         overlay_state: &Arc<Mutex<AltTabOverlayState>>,
         app_handle: &Arc<Mutex<Option<AppHandle>>>,
+        window_snapshot_cache: &Arc<Mutex<AltTabWindowSnapshotCache>>,
         window_id: u32,
     ) {
         let (selected, next_state) = {
@@ -1408,6 +1442,10 @@ mod platform {
         hide_overlay_window(app_handle);
 
         if let Some(window) = selected {
+            window_snapshot_cache
+                .lock()
+                .unwrap()
+                .promote_window_to_front(window.id);
             if let Err(error) = focus_window(&window) {
                 log::warn!(
                     "Failed to focus Alt+Tab target window {}: {}",
@@ -2956,6 +2994,39 @@ mod tests {
         assert_eq!(selected.id, 3);
         assert!(!session.is_active());
         assert!(session.selected().is_none());
+    }
+
+    #[test]
+    fn test_snapshot_cache_promotes_committed_window_to_front() {
+        let mut cache = AltTabWindowSnapshotCache::default();
+        cache.store(vec![
+            window(1, "Code", "engine.rs"),
+            window(2, "Safari", "Docs"),
+            window(3, "Ghostty", "shell"),
+        ]);
+
+        assert!(cache.promote_window_to_front(2));
+        assert_eq!(
+            cache
+                .windows()
+                .iter()
+                .map(|window| window.id)
+                .collect::<Vec<_>>(),
+            vec![2, 1, 3]
+        );
+        assert!(cache.is_fresh(std::time::Duration::from_secs(1)));
+
+        assert!(cache.promote_window_to_front(2));
+        assert_eq!(
+            cache
+                .windows()
+                .iter()
+                .map(|window| window.id)
+                .collect::<Vec<_>>(),
+            vec![2, 1, 3]
+        );
+
+        assert!(!cache.promote_window_to_front(99));
     }
 
     #[test]
