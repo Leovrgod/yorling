@@ -171,7 +171,8 @@ test('wires super right click through FinderSync without a fallback menu window'
   assert.strictEqual(libSource.includes('commands::super_right_click::bootstrap_super_right_click_if_enabled()'), true);
   assert.strictEqual(libSource.includes('commands::super_right_click::start_super_right_click_runtime_heartbeat()'), true);
   assert.strictEqual(libSource.includes('commands::super_right_click::shutdown_super_right_click_runtime()'), true);
-  assert.strictEqual(libSource.includes('commands::super_right_click::start_finder_action_request_worker(app.handle().clone())'), true);
+  assert.strictEqual(libSource.includes('#[cfg(target_os = "macos")]'), true);
+  assert.strictEqual(libSource.includes('commands::super_right_click::start_finder_action_request_worker'), true);
   assert.strictEqual(libSource.includes('commands::super_right_click::start_super_right_click'), true);
   assert.strictEqual(libSource.includes('commands::super_right_click::set_super_right_click_terminal'), true);
   assert.strictEqual(libSource.includes('commands::super_right_click::open_finder_sync_extension_settings'), true);

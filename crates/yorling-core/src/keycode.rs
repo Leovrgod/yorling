@@ -70,6 +70,8 @@ pub enum VirtualKeyCode {
     RightArrow = 0x7C,
     DownArrow = 0x7D,
     UpArrow = 0x7E,
+    Home = 0x73,
+    End = 0x77,
 
     // Numbers
     Key0 = 0x1D,
@@ -156,6 +158,8 @@ impl VirtualKeyCode {
             0x7C => Some(Self::RightArrow),
             0x7D => Some(Self::DownArrow),
             0x7E => Some(Self::UpArrow),
+            0x73 => Some(Self::Home),
+            0x77 => Some(Self::End),
             0x12 => Some(Self::Key1),
             0x13 => Some(Self::Key2),
             0x14 => Some(Self::Key3),
@@ -249,6 +253,8 @@ impl VirtualKeyCode {
             Self::RightArrow => "→",
             Self::DownArrow => "↓",
             Self::UpArrow => "↑",
+            Self::Home => "Home",
+            Self::End => "End",
             Self::F1 => "F1",
             Self::F2 => "F2",
             Self::F3 => "F3",

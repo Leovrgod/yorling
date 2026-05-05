@@ -1,4 +1,5 @@
 import type { MappingRule } from '../../types';
+import type { YorlingPlatform } from '../../utils/platform';
 
 export const defaultRules: MappingRule[] = [
   // === Navigation: Arrow Keys ===
@@ -850,3 +851,63 @@ export const defaultRules: MappingRule[] = [
     active: true,
   },
 ];
+
+const MAC_COMPATIBILITY_SHORTCUT_IDS = new Set([
+  'win-ctrl-c',
+  'win-ctrl-v',
+  'win-ctrl-x',
+  'win-ctrl-s',
+  'win-shift-screenshot',
+  'win-ctrl-z',
+  'win-ctrl-a',
+  'win-alt-tab',
+]);
+
+const WINDOWS_RULE_OVERRIDES: Record<string, Partial<MappingRule>> = {
+  'nav-h': {
+    to: 'Home',
+    toDisplay: 'Home',
+  },
+  'nav-n': {
+    to: 'End',
+    toDisplay: 'End',
+  },
+  'nav-u': {
+    to: 'Ctrl+Left',
+    toDisplay: 'Ctrl←',
+  },
+  'nav-o': {
+    to: 'Ctrl+Right',
+    toDisplay: 'Ctrl→',
+  },
+  'edit-w': {
+    to: 'Home→Select→Backspace',
+    toDisplay: 'Home⇧End⌫',
+  },
+  'edit-r': {
+    to: 'Ctrl+Backspace',
+    toDisplay: 'Ctrl⌫',
+  },
+  'mouse-tab-c': {
+    to: 'Ctrl+B',
+    toDisplay: 'Ctrl+B',
+  },
+};
+
+export function isMacCompatibilityShortcutRule(rule: MappingRule): boolean {
+  return MAC_COMPATIBILITY_SHORTCUT_IDS.has(rule.id);
+}
+
+export function getKeyboardMappingRules(platform: YorlingPlatform): MappingRule[] {
+  if (platform !== 'windows') {
+    return defaultRules;
+  }
+
+  return defaultRules
+    .filter((rule) => !isMacCompatibilityShortcutRule(rule))
+    .map((rule) => ({
+      ...rule,
+      ...WINDOWS_RULE_OVERRIDES[rule.id],
+      platform: 'windows',
+    }));
+}

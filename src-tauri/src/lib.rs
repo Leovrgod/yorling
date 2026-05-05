@@ -2,6 +2,8 @@ mod alt_tab;
 mod bracket_overlay;
 mod commands;
 mod island;
+#[cfg(target_os = "windows")]
+mod windows_keyboard;
 
 use commands::clipboard::ClipboardState;
 use commands::keyboard::InterceptorState;
@@ -156,6 +158,10 @@ fn register_island_shortcuts<R: Runtime>(app: &tauri::AppHandle<R>) {
     }
 }
 
+const fn should_start_island_runtime() -> bool {
+    cfg!(target_os = "macos")
+}
+
 pub fn run() {
     env_logger::init();
 
@@ -197,33 +203,39 @@ pub fn run() {
             let state = app.state::<Arc<InterceptorState>>();
             state.bind_app_handle(app.handle().clone());
 
-            // Create island window (non-async, safe in setup)
-            let island_state = app.state::<Arc<IslandState>>();
-            let island_enabled = island_state
-                .enabled
-                .load(std::sync::atomic::Ordering::Relaxed);
-            if let Err(e) = island::create_island_window(app.handle(), island_enabled) {
-                log::warn!("Failed to create island window: {}", e);
+            if should_start_island_runtime() {
+                // Create island window (non-async, safe in setup)
+                let island_state = app.state::<Arc<IslandState>>();
+                let island_enabled = island_state
+                    .enabled
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                if let Err(e) = island::create_island_window(app.handle(), island_enabled) {
+                    log::warn!("Failed to create island window: {}", e);
+                }
+
+                // Start island bridge server and event forwarding on the async runtime
+                let island = island_state.inner().clone();
+                let handle = app.handle().clone();
+                let rt_handle = tauri::async_runtime::handle();
+                rt_handle.spawn(async move {
+                    island::setup_event_forwarding(&handle, &island.session_store);
+                    island::start_bridge_server(&island);
+                    island::bootstrap_provider_hooks_if_needed(&island).await;
+                });
+
+                // Start fullscreen monitor
+                island::start_fullscreen_monitor(app.handle());
+
+                // Start screen change monitor (multi-monitor support)
+                island::start_screen_change_monitor(app.handle());
+
+                // Register global shortcuts for island
+                register_island_shortcuts(app.handle());
+            } else {
+                log::info!(
+                    "Skipping island runtime on this platform; keyboard mapping stays active"
+                );
             }
-
-            // Start island bridge server and event forwarding on the async runtime
-            let island = island_state.inner().clone();
-            let handle = app.handle().clone();
-            let rt_handle = tauri::async_runtime::handle();
-            rt_handle.spawn(async move {
-                island::setup_event_forwarding(&handle, &island.session_store);
-                island::start_bridge_server(&island);
-                island::bootstrap_provider_hooks_if_needed(&island).await;
-            });
-
-            // Start fullscreen monitor
-            island::start_fullscreen_monitor(app.handle());
-
-            // Start screen change monitor (multi-monitor support)
-            island::start_screen_change_monitor(app.handle());
-
-            // Register global shortcuts for island
-            register_island_shortcuts(app.handle());
 
             // Keep a small, visual clipboard history warm for the main window module.
             commands::clipboard::start_clipboard_monitor(
@@ -231,14 +243,19 @@ pub fn run() {
                 clipboard_state.clone(),
             );
 
-            // FinderSync stays lightweight and hands heavier Finder actions to the main app.
-            suppress_ready_presentation_for_setup.store(
-                commands::super_right_click::has_recent_pending_finder_action_request(),
-                Ordering::SeqCst,
-            );
-            commands::super_right_click::start_super_right_click_runtime_heartbeat();
-            commands::super_right_click::bootstrap_super_right_click_if_enabled();
-            commands::super_right_click::start_finder_action_request_worker(app.handle().clone());
+            #[cfg(target_os = "macos")]
+            {
+                // FinderSync stays lightweight and hands heavier Finder actions to the main app.
+                suppress_ready_presentation_for_setup.store(
+                    commands::super_right_click::has_recent_pending_finder_action_request(),
+                    Ordering::SeqCst,
+                );
+                commands::super_right_click::start_super_right_click_runtime_heartbeat();
+                commands::super_right_click::bootstrap_super_right_click_if_enabled();
+                commands::super_right_click::start_finder_action_request_worker(
+                    app.handle().clone(),
+                );
+            }
 
             Ok(())
         })
@@ -350,7 +367,15 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{MainWindowLifecycle, MainWindowPresentationPlan, main_window_presentation_plan};
+    use super::{
+        MainWindowLifecycle, MainWindowPresentationPlan, main_window_presentation_plan,
+        should_start_island_runtime,
+    };
+
+    #[test]
+    fn island_runtime_starts_only_on_macos() {
+        assert_eq!(should_start_island_runtime(), cfg!(target_os = "macos"));
+    }
 
     #[test]
     fn ready_event_surfaces_the_main_window() {

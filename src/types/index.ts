@@ -4,6 +4,11 @@ export interface EngineStatus {
   event_count: number;
   has_accessibility: boolean;
   has_screen_recording: boolean;
+  platform: 'macos' | 'windows' | 'linux' | 'unknown';
+  interception_supported: boolean;
+  requires_accessibility: boolean;
+  requires_screen_recording: boolean;
+  elevation_limited: boolean;
 }
 
 export interface AltTabWindowLite {
@@ -80,6 +85,7 @@ export interface MappingRule {
   modifier?: string;
   modifierDisplay?: string;
   active: boolean;
+  platform?: 'macos' | 'windows' | 'all';
 }
 
 export type ModuleName = 'keyboard' | 'music' | 'superRightClick' | 'clipboard' | 'island' | 'terminals';

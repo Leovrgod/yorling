@@ -180,6 +180,12 @@ struct ReplayKeyInfo {
     extra_flags: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MappingPlatform {
+    Macos,
+    Windows,
+}
+
 pub struct MappingEngine {
     hold_state: HoldState,
     /// Hold modifier keycode → layer definition
@@ -200,6 +206,10 @@ pub struct MappingEngine {
     /// Currently held Win+Shift+S remap source keys so key-up can still emit
     /// Cmd+Shift+4 even if Command/Shift are released first.
     win_shift_screenshot_held: HashSet<u16>,
+    mac_compatibility_shortcuts_enabled: bool,
+    alt_tab_shortcut_enabled: bool,
+    mouse_sidebar_shortcut_keycode: u16,
+    mouse_sidebar_shortcut_flags: u64,
     alt_tab_active: bool,
     bracket_mode: BracketModeState,
     mouse_mode: MouseModeState,
@@ -213,7 +223,33 @@ pub struct MappingEngine {
 
 impl MappingEngine {
     pub fn new() -> Self {
+        Self::new_for_platform(MappingPlatform::Macos)
+    }
+
+    pub fn new_for_platform(platform: MappingPlatform) -> Self {
+        let is_windows = platform == MappingPlatform::Windows;
         let mut space_mappings = HashMap::new();
+        let (line_start_keycode, line_start_flags) = if is_windows {
+            (VirtualKeyCode::Home as u16, 0)
+        } else {
+            (VirtualKeyCode::LeftArrow as u16, keycode::FLAG_COMMAND)
+        };
+        let (line_end_keycode, line_end_flags) = if is_windows {
+            (VirtualKeyCode::End as u16, 0)
+        } else {
+            (VirtualKeyCode::RightArrow as u16, keycode::FLAG_COMMAND)
+        };
+        let word_jump_flags = if is_windows {
+            keycode::FLAG_CONTROL
+        } else {
+            keycode::FLAG_OPTION
+        };
+        let delete_word_flags = word_jump_flags;
+        let (mouse_sidebar_shortcut_keycode, mouse_sidebar_shortcut_flags) = if is_windows {
+            (VirtualKeyCode::B as u16, keycode::FLAG_CONTROL)
+        } else {
+            (VirtualKeyCode::LeftBracket as u16, keycode::FLAG_COMMAND)
+        };
 
         // === Navigation: Arrow keys ===
         // Space + J → Left Arrow
@@ -254,39 +290,39 @@ impl MappingEngine {
         );
 
         // === Navigation: Word/Line jump ===
-        // Space + H → Cmd+Left (start of line)
+        // Space + H → line start (Cmd+Left on macOS, Home on Windows)
         space_mappings.insert(
             VirtualKeyCode::H as u16,
             KeyMapping::Single {
-                target_keycode: VirtualKeyCode::LeftArrow as u16,
-                extra_flags: keycode::FLAG_COMMAND,
+                target_keycode: line_start_keycode,
+                extra_flags: line_start_flags,
                 preserve_flags: true,
             },
         );
-        // Space + N → Cmd+Right (end of line)
+        // Space + N → line end (Cmd+Right on macOS, End on Windows)
         space_mappings.insert(
             VirtualKeyCode::N as u16,
             KeyMapping::Single {
-                target_keycode: VirtualKeyCode::RightArrow as u16,
-                extra_flags: keycode::FLAG_COMMAND,
+                target_keycode: line_end_keycode,
+                extra_flags: line_end_flags,
                 preserve_flags: true,
             },
         );
-        // Space + U → Option+Left (word left)
+        // Space + U → word left (Option+Left on macOS, Ctrl+Left on Windows)
         space_mappings.insert(
             VirtualKeyCode::U as u16,
             KeyMapping::Single {
                 target_keycode: VirtualKeyCode::LeftArrow as u16,
-                extra_flags: keycode::FLAG_OPTION,
+                extra_flags: word_jump_flags,
                 preserve_flags: true,
             },
         );
-        // Space + O → Option+Right (word right)
+        // Space + O → word right (Option+Right on macOS, Ctrl+Right on Windows)
         space_mappings.insert(
             VirtualKeyCode::O as u16,
             KeyMapping::Single {
                 target_keycode: VirtualKeyCode::RightArrow as u16,
-                extra_flags: keycode::FLAG_OPTION,
+                extra_flags: word_jump_flags,
                 preserve_flags: true,
             },
         );
@@ -314,17 +350,17 @@ impl MappingEngine {
                 },
             ]),
         );
-        // Space + W → Delete line: Cmd+Left (Home), Shift+Cmd+Right (select to end), Backspace
+        // Space + W → Delete line using each platform's native line-start/end shortcuts.
         space_mappings.insert(
             VirtualKeyCode::W as u16,
             KeyMapping::Sequence(vec![
                 SequenceStep {
-                    keycode: VirtualKeyCode::LeftArrow as u16,
-                    extra_flags: keycode::FLAG_COMMAND,
+                    keycode: line_start_keycode,
+                    extra_flags: line_start_flags,
                 },
                 SequenceStep {
-                    keycode: VirtualKeyCode::RightArrow as u16,
-                    extra_flags: keycode::FLAG_SHIFT | keycode::FLAG_COMMAND,
+                    keycode: line_end_keycode,
+                    extra_flags: keycode::FLAG_SHIFT | line_end_flags,
                 },
                 SequenceStep {
                     keycode: VirtualKeyCode::Delete as u16,
@@ -341,12 +377,12 @@ impl MappingEngine {
                 preserve_flags: false,
             },
         );
-        // Space + R → Option+Delete (delete word backward)
+        // Space + R → delete word backward (Option+Delete on macOS, Ctrl+Backspace on Windows)
         space_mappings.insert(
             VirtualKeyCode::R as u16,
             KeyMapping::Single {
                 target_keycode: VirtualKeyCode::Delete as u16,
-                extra_flags: keycode::FLAG_OPTION,
+                extra_flags: delete_word_flags,
                 preserve_flags: false,
             },
         );
@@ -540,18 +576,22 @@ impl MappingEngine {
             },
         );
 
-        // === Windows compatibility: Ctrl→Cmd remapping ===
-        let ctrl_to_cmd_keys: HashSet<u16> = [
-            VirtualKeyCode::C, // Copy
-            VirtualKeyCode::V, // Paste
-            VirtualKeyCode::X, // Cut
-            VirtualKeyCode::S, // Save
-            VirtualKeyCode::Z, // Undo
-            VirtualKeyCode::A, // Select All
-        ]
-        .iter()
-        .map(|k| *k as u16)
-        .collect();
+        // === macOS compatibility for Windows muscle memory: Ctrl→Cmd remapping ===
+        let ctrl_to_cmd_keys: HashSet<u16> = if is_windows {
+            HashSet::new()
+        } else {
+            [
+                VirtualKeyCode::C, // Copy
+                VirtualKeyCode::V, // Paste
+                VirtualKeyCode::X, // Cut
+                VirtualKeyCode::S, // Save
+                VirtualKeyCode::Z, // Undo
+                VirtualKeyCode::A, // Select All
+            ]
+            .iter()
+            .map(|k| *k as u16)
+            .collect()
+        };
 
         Self {
             hold_state: HoldState::Idle,
@@ -562,6 +602,10 @@ impl MappingEngine {
             ctrl_to_cmd_keys,
             ctrl_to_cmd_held: HashSet::new(),
             win_shift_screenshot_held: HashSet::new(),
+            mac_compatibility_shortcuts_enabled: !is_windows,
+            alt_tab_shortcut_enabled: !is_windows,
+            mouse_sidebar_shortcut_keycode,
+            mouse_sidebar_shortcut_flags,
             alt_tab_active: false,
             bracket_mode: BracketModeState::Inactive,
             mouse_mode: MouseModeState::Inactive,
@@ -895,19 +939,19 @@ impl MappingEngine {
         }
     }
 
-    fn command_shortcut_action(target_keycode: u16) -> EngineAction {
+    fn shortcut_action(target_keycode: u16, extra_flags: u64) -> EngineAction {
         EngineAction::Emit(vec![
             SyntheticKey {
                 keycode: target_keycode,
                 key_down: true,
                 preserve_flags: false,
-                extra_flags: keycode::FLAG_COMMAND,
+                extra_flags,
             },
             SyntheticKey {
                 keycode: target_keycode,
                 key_down: false,
                 preserve_flags: false,
-                extra_flags: keycode::FLAG_COMMAND,
+                extra_flags,
             },
         ])
     }
@@ -1107,14 +1151,15 @@ impl MappingEngine {
                     return MouseModeResult::Handled(EngineAction::Suppress);
                 }
 
-                // C → Cmd+[ sidebar shortcut (stays in mouse mode)
+                // C → platform sidebar shortcut (stays in mouse mode)
                 if matches!(VirtualKeyCode::from_raw(keycode), Some(VirtualKeyCode::C)) {
                     if key_down {
                         if is_autorepeat || !self.mouse_held_keys.insert(keycode) {
                             return MouseModeResult::Handled(EngineAction::Suppress);
                         }
-                        return MouseModeResult::Handled(Self::command_shortcut_action(
-                            VirtualKeyCode::LeftBracket as u16,
+                        return MouseModeResult::Handled(Self::shortcut_action(
+                            self.mouse_sidebar_shortcut_keycode,
+                            self.mouse_sidebar_shortcut_flags,
                         ));
                     } else {
                         self.mouse_held_keys.remove(&keycode);
@@ -1306,7 +1351,8 @@ impl MappingEngine {
         // Pre-process: Control→Command modifier remapping for Windows keyboard compatibility.
         // Only remap when Control is pressed WITHOUT Command (avoid intercepting Ctrl+Cmd combos).
         let screenshot_shortcut_flags = keycode::FLAG_COMMAND | keycode::FLAG_SHIFT;
-        if keycode == VirtualKeyCode::S as u16
+        if self.mac_compatibility_shortcuts_enabled
+            && keycode == VirtualKeyCode::S as u16
             && flags & screenshot_shortcut_flags == screenshot_shortcut_flags
             && flags & (keycode::FLAG_CONTROL | keycode::FLAG_OPTION) == 0
         {
@@ -1414,7 +1460,7 @@ impl MappingEngine {
             Some(VirtualKeyCode::Option | VirtualKeyCode::RightOption)
         );
 
-        if self.alt_tab_active {
+        if self.alt_tab_shortcut_enabled && self.alt_tab_active {
             if !key_down && is_option_key && flags & keycode::FLAG_OPTION == 0 {
                 self.alt_tab_active = false;
                 return EngineAction::System(SystemAction::AltTabCommit);
@@ -1435,7 +1481,11 @@ impl MappingEngine {
             }
         }
 
-        if key_down && keycode == VirtualKeyCode::Tab as u16 && flags & keycode::FLAG_OPTION != 0 {
+        if self.alt_tab_shortcut_enabled
+            && key_down
+            && keycode == VirtualKeyCode::Tab as u16
+            && flags & keycode::FLAG_OPTION != 0
+        {
             if is_autorepeat {
                 return EngineAction::Suppress;
             }
@@ -1599,6 +1649,12 @@ mod tests {
     }
     fn right() -> u16 {
         VirtualKeyCode::RightArrow as u16
+    }
+    fn home() -> u16 {
+        VirtualKeyCode::Home as u16
+    }
+    fn end() -> u16 {
+        VirtualKeyCode::End as u16
     }
     fn tab() -> u16 {
         VirtualKeyCode::Tab as u16
@@ -2307,6 +2363,91 @@ mod tests {
         ));
         let action = engine.process_key(VirtualKeyCode::V as u16, true, false, 0);
         assert_emit_with_flags(&action, &[(tab(), true, keycode::FLAG_CONTROL)]);
+    }
+
+    #[test]
+    fn windows_space_layer_uses_native_navigation_targets() {
+        let mut engine = MappingEngine::new_for_platform(MappingPlatform::Windows);
+        assert!(matches!(
+            engine.process_key(space(), true, false, 0),
+            EngineAction::Suppress
+        ));
+
+        assert_emit_with_flags(
+            &engine.process_key(VirtualKeyCode::H as u16, true, false, 0),
+            &[(home(), true, 0)],
+        );
+        assert_emit_with_flags(
+            &engine.process_key(VirtualKeyCode::H as u16, false, false, 0),
+            &[(home(), false, 0)],
+        );
+
+        assert_emit_with_flags(
+            &engine.process_key(VirtualKeyCode::U as u16, true, false, 0),
+            &[(left(), true, keycode::FLAG_CONTROL)],
+        );
+        assert_emit_with_flags(
+            &engine.process_key(VirtualKeyCode::U as u16, false, false, 0),
+            &[(left(), false, keycode::FLAG_CONTROL)],
+        );
+
+        assert_emit_with_flags(
+            &engine.process_key(VirtualKeyCode::N as u16, true, false, 0),
+            &[(end(), true, 0)],
+        );
+    }
+
+    #[test]
+    fn windows_delete_word_and_line_use_ctrl_and_home_end() {
+        let mut engine = MappingEngine::new_for_platform(MappingPlatform::Windows);
+        engine.process_key(space(), true, false, 0);
+
+        assert_emit_with_flags(
+            &engine.process_key(VirtualKeyCode::R as u16, true, false, 0),
+            &[(delete(), true, keycode::FLAG_CONTROL)],
+        );
+        assert!(matches!(
+            engine.process_key(VirtualKeyCode::R as u16, false, false, 0),
+            EngineAction::Emit(_)
+        ));
+
+        let mut engine = MappingEngine::new_for_platform(MappingPlatform::Windows);
+        engine.process_key(space(), true, false, 0);
+        let action = engine.process_key(VirtualKeyCode::W as u16, true, false, 0);
+        assert_emit_with_flags(
+            &action,
+            &[
+                (home(), true, 0),
+                (home(), false, 0),
+                (end(), true, keycode::FLAG_SHIFT),
+                (end(), false, keycode::FLAG_SHIFT),
+                (delete(), true, 0),
+                (delete(), false, 0),
+            ],
+        );
+    }
+
+    #[test]
+    fn windows_platform_does_not_take_over_native_system_shortcuts() {
+        let mut engine = MappingEngine::new_for_platform(MappingPlatform::Windows);
+
+        assert!(matches!(
+            engine.process_key(c_key(), true, false, keycode::FLAG_CONTROL),
+            EngineAction::PassThrough
+        ));
+        assert!(matches!(
+            engine.process_key(
+                s_key(),
+                true,
+                false,
+                keycode::FLAG_COMMAND | keycode::FLAG_SHIFT
+            ),
+            EngineAction::PassThrough
+        ));
+        assert!(matches!(
+            engine.process_key(tab(), true, false, keycode::FLAG_OPTION),
+            EngineAction::PassThrough
+        ));
     }
 
     #[test]
@@ -3623,6 +3764,24 @@ mod tests {
             engine.process_key(c_key(), false, false, 0),
             EngineAction::Suppress
         ));
+    }
+
+    #[test]
+    fn windows_mouse_mode_c_uses_ctrl_b_sidebar_shortcut() {
+        let mut engine = MappingEngine::new_for_platform(MappingPlatform::Windows);
+        engine.set_enabled(true);
+
+        engine.process_key(tab(), true, false, 0);
+        engine.process_key(j(), true, false, 0);
+
+        assert_emit_with_flags(
+            &engine.process_key(c_key(), true, false, 0),
+            &[
+                (b(), true, keycode::FLAG_CONTROL),
+                (b(), false, keycode::FLAG_CONTROL),
+            ],
+        );
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
     }
 
     #[test]

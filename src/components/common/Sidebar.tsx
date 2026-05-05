@@ -14,6 +14,7 @@ import { pickProjectDirectory } from '../terminals/projectPicker';
 
 interface SidebarProps {
   activeModule: ModuleName;
+  enabledModules?: ModuleName[];
   onModuleChange: (module: ModuleName) => void;
   windowControls: ReactNode;
 }
@@ -156,6 +157,7 @@ export function SidebarDivider() {
 
 export function Sidebar({
   activeModule,
+  enabledModules,
   onModuleChange,
   windowControls,
 }: SidebarProps) {
@@ -169,6 +171,9 @@ export function Sidebar({
   const addTerminalProject = useTerminalStore((state) => state.addProject);
   const selectTerminalProject = useTerminalStore((state) => state.selectProject);
   const copy = getUiCopy(language);
+  const visibleModules = enabledModules
+    ? modules.filter((mod) => enabledModules.includes(mod.id))
+    : modules;
 
   const handleAddTerminalProject = () => {
     void (async () => {
@@ -203,7 +208,7 @@ export function Sidebar({
       </div>
 
       <nav className="sidebar-nav">
-        {modules.map((mod) => {
+        {visibleModules.map((mod) => {
           if (mod.id === 'terminals') {
             return (
               <div key={mod.id} className="sidebar-terminal-group">

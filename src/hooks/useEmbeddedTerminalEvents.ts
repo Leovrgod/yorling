@@ -13,11 +13,15 @@ interface EmbeddedTerminalExitEvent {
   code: number | null;
 }
 
-export function useEmbeddedTerminalEvents() {
+export function useEmbeddedTerminalEvents(enabled = true) {
   const appendOutput = useTerminalStore((state) => state.appendEmbeddedTerminalOutput);
   const markExited = useTerminalStore((state) => state.markEmbeddedTerminalExited);
 
   useEffect(() => {
+    if (!enabled) {
+      return undefined;
+    }
+
     const unlistenData = listen<EmbeddedTerminalDataEvent>('embedded-terminal-data', (event) => {
       appendOutput(event.payload.id, event.payload.data);
     });
@@ -29,5 +33,5 @@ export function useEmbeddedTerminalEvents() {
       unlistenData.then((cleanup) => cleanup());
       unlistenExit.then((cleanup) => cleanup());
     };
-  }, [appendOutput, markExited]);
+  }, [appendOutput, enabled, markExited]);
 }

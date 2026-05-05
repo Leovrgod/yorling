@@ -90,6 +90,11 @@ type UiCopy = {
     permissionTitle: string;
     permissionDescription: string;
     permissionAction: string;
+    windowsUnavailableTitle: string;
+    windowsUnavailableDescription: string;
+    windowsUnavailableAction: string;
+    windowsElevationTitle: string;
+    windowsElevationDescription: string;
     selectedLayer: string;
     liveLayer: string;
     activeLayerHint: string;
@@ -344,6 +349,11 @@ const UI_COPY: Record<AppLanguageId, UiCopy> = {
       permissionTitle: '需要辅助功能权限',
       permissionDescription: 'Yorling 需要系统辅助功能权限才能接管键盘事件。授权后如未生效，请重启应用。',
       permissionAction: '前往授权',
+      windowsUnavailableTitle: '等待 Windows 键盘钩子',
+      windowsUnavailableDescription: 'Windows 页面已经按原生快捷键语义裁剪：不会接管 Ctrl+C、Alt+Tab、Win+Shift+S 等系统已有操作。底层低延迟键盘钩子接入前，先不要启动映射。',
+      windowsUnavailableAction: '即将接入',
+      windowsElevationTitle: '管理员窗口会受系统权限边界限制',
+      windowsElevationDescription: 'Windows 不需要 macOS 那种辅助功能或屏幕录制授权；但普通权限进程不能向管理员权限窗口注入按键。需要覆盖管理员窗口时，请以同等权限启动 Yorling。',
       selectedLayer: '当前层',
       liveLayer: '实时层',
       activeLayerHint: '高亮按键即当前修饰键控制的映射层',
@@ -596,6 +606,11 @@ const UI_COPY: Record<AppLanguageId, UiCopy> = {
       permissionTitle: 'Accessibility permission required',
       permissionDescription: 'Yorling needs macOS Accessibility permission to intercept keyboard events. Restart the app if the permission does not take effect right away.',
       permissionAction: 'Grant access',
+      windowsUnavailableTitle: 'Waiting for the Windows keyboard hook',
+      windowsUnavailableDescription: 'This page now uses Windows-native shortcut semantics: it will not take over Ctrl+C, Alt+Tab, Win+Shift+S, or other built-in Windows operations. Start remains disabled until the low-latency hook is wired.',
+      windowsUnavailableAction: 'Pending hook',
+      windowsElevationTitle: 'Administrator windows follow Windows integrity boundaries',
+      windowsElevationDescription: 'Windows does not need macOS-style Accessibility or Screen Recording permission, but a normal process cannot inject keys into administrator windows. Run Yorling with matching elevation when those windows must be covered.',
       selectedLayer: 'Selected layer',
       liveLayer: 'Live layer',
       activeLayerHint: 'Highlighted keys belong to the mapping layer controlled by this modifier.',

@@ -1,4 +1,5 @@
 import type { AppLanguageId, MappingRule } from '../../types';
+import type { YorlingPlatform } from '../../utils/platform';
 
 export type KeyboardLayerId = 'space' | 'number' | 'symbol' | 'mouse';
 
@@ -43,7 +44,9 @@ interface LayerConfig {
   tips: string[];
 }
 
-function getLayerConfigs(language: AppLanguageId): LayerConfig[] {
+function getLayerConfigs(language: AppLanguageId, platform: YorlingPlatform): LayerConfig[] {
+  const isWindows = platform === 'windows';
+
   if (language === 'en') {
     return [
       {
@@ -52,8 +55,12 @@ function getLayerConfigs(language: AppLanguageId): LayerConfig[] {
         modifier: 'Space',
         modifierKey: 'Space',
         title: 'Space Layer',
-        description: 'Turns the letter block into navigation, deletion, return, and tab switching.',
-        tips: ['J K I L handle arrows', 'H/U/O/N jump by line and word', 'Q/W/E/R/A/S cover edit actions'],
+        description: isWindows
+          ? 'Turns the letter block into Windows-native navigation, deletion, return, and tab switching.'
+          : 'Turns the letter block into navigation, deletion, return, and tab switching.',
+        tips: isWindows
+          ? ['J K I L handle arrows', 'H/N use Home and End', 'U/O/R use Ctrl word shortcuts']
+          : ['J K I L handle arrows', 'H/U/O/N jump by line and word', 'Q/W/E/R/A/S cover edit actions'],
       },
       {
         id: 'number',
@@ -80,7 +87,9 @@ function getLayerConfigs(language: AppLanguageId): LayerConfig[] {
         modifierKey: 'Tab',
         title: 'Mouse Layer',
         description: 'Hold Tab for mouse control: JKLI move, U/O scroll, R back, C toggles sidebar, N/M click.',
-        tips: ['Movement is faster while Tab is held', 'Movement slows after release', 'R sends the mouse back button', 'C sends Cmd+[ to toggle sidebars', 'N exits after left click, M keeps the mode after right click'],
+        tips: isWindows
+          ? ['Movement is faster while Tab is held', 'Movement slows after release', 'R sends the mouse back button', 'C sends Ctrl+B for editor sidebars', 'N exits after left click, M keeps the mode after right click']
+          : ['Movement is faster while Tab is held', 'Movement slows after release', 'R sends the mouse back button', 'C sends Cmd+[ to toggle sidebars', 'N exits after left click, M keeps the mode after right click'],
       },
     ];
   }
@@ -92,8 +101,12 @@ function getLayerConfigs(language: AppLanguageId): LayerConfig[] {
       modifier: 'Space',
       modifierKey: 'Space',
       title: '空格层',
-      description: '把主字母区变成方向、删除、换行和标签切换。',
-      tips: ['J K I L 负责方向', 'H/U/O/N 负责整词与行首行尾跳转', 'Q/W/E/R/A/S 是编辑动作'],
+      description: isWindows
+        ? '把主字母区变成 Windows 原生的方向、删除、换行和标签切换。'
+        : '把主字母区变成方向、删除、换行和标签切换。',
+      tips: isWindows
+        ? ['J K I L 负责方向', 'H/N 使用 Home 和 End', 'U/O/R 使用 Ctrl 系列整词快捷键']
+        : ['J K I L 负责方向', 'H/U/O/N 负责整词与行首行尾跳转', 'Q/W/E/R/A/S 是编辑动作'],
     },
     {
       id: 'number',
@@ -120,7 +133,9 @@ function getLayerConfigs(language: AppLanguageId): LayerConfig[] {
       modifierKey: 'Tab',
       title: '鼠标层',
       description: '按住 Tab 进入鼠标控制：JKLI 移动、U/O 滚动、R 后退、C 开关侧边栏、N/M 点击。',
-      tips: ['按住 Tab 时移动更快', '松开 Tab 仍保留方向，但速度会变慢', 'R 发送鼠标后退键', 'C 发送 Cmd+[ 开关侧边栏', 'N 左键后退出，M 右键后保留模式'],
+      tips: isWindows
+        ? ['按住 Tab 时移动更快', '松开 Tab 仍保留方向，但速度会变慢', 'R 发送鼠标后退键', 'C 发送 Ctrl+B 适配编辑器侧边栏', 'N 左键后退出，M 右键后保留模式']
+        : ['按住 Tab 时移动更快', '松开 Tab 仍保留方向，但速度会变慢', 'R 发送鼠标后退键', 'C 发送 Cmd+[ 开关侧边栏', 'N 左键后退出，M 右键后保留模式'],
     },
   ];
 }
@@ -198,11 +213,32 @@ export const KEYBOARD_LAYOUT_ROWS: KeyboardLayoutKey[][] = [
   ],
 ];
 
+export function getKeyboardLayoutRows(platform: YorlingPlatform): KeyboardLayoutKey[][] {
+  if (platform !== 'windows') {
+    return KEYBOARD_LAYOUT_ROWS;
+  }
+
+  return KEYBOARD_LAYOUT_ROWS.map((row) => row.map((keyItem) => {
+    switch (keyItem.id) {
+      case 'Opt':
+      case 'OptRight':
+        return { ...keyItem, label: 'Alt' };
+      case 'Cmd':
+      case 'CmdRight':
+        return { ...keyItem, label: 'Win' };
+      case 'Backspace':
+        return { ...keyItem, label: 'Backspace' };
+      default:
+        return keyItem;
+    }
+  }));
+}
+
 function isTapComboRule(rule: MappingRule): boolean {
   return rule.modifier === '; (tap)';
 }
 
-function getKeyboardCaption(rule: MappingRule, language: AppLanguageId): string {
+function getKeyboardCaption(rule: MappingRule, language: AppLanguageId, platform: YorlingPlatform): string {
   if (language === 'en') {
     switch (rule.id) {
       case 'nav-j':
@@ -252,7 +288,7 @@ function getKeyboardCaption(rule: MappingRule, language: AppLanguageId): string 
       case 'mouse-tab-r':
         return 'Mouse Back';
       case 'mouse-tab-c':
-        return 'Toggle Sidebar';
+        return platform === 'windows' ? 'Ctrl+B Sidebar' : 'Toggle Sidebar';
       case 'mouse-tab-n':
         return 'Left Click';
       case 'mouse-tab-m':
@@ -310,7 +346,7 @@ function getKeyboardCaption(rule: MappingRule, language: AppLanguageId): string 
     case 'mouse-tab-r':
       return '鼠标后退';
     case 'mouse-tab-c':
-      return '开关侧边栏';
+      return platform === 'windows' ? 'Ctrl+B 侧边栏' : '开关侧边栏';
     case 'mouse-tab-n':
       return '左键点击';
     case 'mouse-tab-m':
@@ -323,11 +359,12 @@ function getKeyboardCaption(rule: MappingRule, language: AppLanguageId): string 
 function createKeyTargets(
   rules: MappingRule[],
   language: AppLanguageId,
+  platform: YorlingPlatform,
 ): Record<string, KeyboardKeyTarget> {
   return rules.reduce<Record<string, KeyboardKeyTarget>>((targets, rule) => {
     targets[rule.fromDisplay] = {
       display: rule.toDisplay,
-      description: getKeyboardCaption(rule, language),
+      description: getKeyboardCaption(rule, language, platform),
       rule,
     };
     return targets;
@@ -356,13 +393,14 @@ export function getLocalizedRuleTexts(
 export function buildKeyboardLayerViews(
   rules: MappingRule[],
   language: AppLanguageId,
+  platform: YorlingPlatform = 'macos',
 ): {
   layers: KeyboardLayerView[];
   otherRules: MappingRule[];
 } {
   const activeRules = rules.filter((rule) => rule.active);
   const layerRuleIds = new Set<string>();
-  const layerConfigs = getLayerConfigs(language);
+  const layerConfigs = getLayerConfigs(language, platform);
 
   const layers = layerConfigs.map((config) => {
     const scopedRules = activeRules.filter((rule) => rule.modifier === config.modifier);
@@ -388,7 +426,7 @@ export function buildKeyboardLayerViews(
       title: config.title,
       description: config.description,
       tips: config.tips,
-      keyTargets: createKeyTargets(keyRules, language),
+      keyTargets: createKeyTargets(keyRules, language, platform),
       combos,
     };
   });

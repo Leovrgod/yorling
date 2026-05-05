@@ -13,7 +13,7 @@ test('registers the multi-terminal module across the app shell', () => {
   assert.strictEqual(copySource.includes("terminals: 'Terminals'"), true);
   assert.strictEqual(appSource.includes("import('./components/terminals/MultiTerminal')"), true);
   assert.strictEqual(appSource.includes("import { useEmbeddedTerminalEvents }"), true);
-  assert.strictEqual(appSource.includes('useEmbeddedTerminalEvents();'), true);
+  assert.strictEqual(appSource.includes('useEmbeddedTerminalEvents(shouldEnableMacOnlyBackgroundModules);'), true);
   assert.strictEqual(appSource.includes('terminalModuleMounted'), true);
   assert.strictEqual(appSource.includes('renderTransientModule'), true);
   assert.strictEqual(appSource.includes('app-module-persistent'), true);

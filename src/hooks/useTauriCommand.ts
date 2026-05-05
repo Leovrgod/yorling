@@ -187,7 +187,16 @@ export function useKeyboardStartupRestore() {
       return;
     }
 
-    if (!status.has_accessibility) {
+    if (status.platform === 'unknown') {
+      return;
+    }
+
+    if (!status.interception_supported) {
+      restoreStateRef.current = 'done';
+      return;
+    }
+
+    if (status.requires_accessibility && !status.has_accessibility) {
       return;
     }
 
@@ -212,5 +221,15 @@ export function useKeyboardStartupRestore() {
         restoreStateRef.current = 'idle';
       }
     })();
-  }, [autoEnable, autoStart, setEnabled, startInterceptor, status.has_accessibility, status.running]);
+  }, [
+    autoEnable,
+    autoStart,
+    setEnabled,
+    startInterceptor,
+    status.has_accessibility,
+    status.interception_supported,
+    status.platform,
+    status.requires_accessibility,
+    status.running,
+  ]);
 }

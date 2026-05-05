@@ -3,26 +3,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn bridge_binary_name() -> &'static str {
-    #[cfg(windows)]
-    {
+fn bridge_binary_name(target: &str) -> &'static str {
+    if target.contains("windows") {
         "yorling-bridge.exe"
-    }
-
-    #[cfg(not(windows))]
-    {
+    } else {
         "yorling-bridge"
     }
 }
 
 fn bridge_sidecar_filename(target: &str) -> String {
-    #[cfg(windows)]
-    {
+    if target.contains("windows") {
         format!("yorling-bridge-{target}.exe")
-    }
-
-    #[cfg(not(windows))]
-    {
+    } else {
         format!("yorling-bridge-{target}")
     }
 }
@@ -66,7 +58,7 @@ fn build_bridge_sidecar(manifest_dir: &Path, target: &str, profile: &str) {
     let source_binary = bridge_target_dir
         .join(target)
         .join(profile)
-        .join(bridge_binary_name());
+        .join(bridge_binary_name(target));
     let sidecar_dir = manifest_dir.join("binaries");
     let sidecar_binary = sidecar_dir.join(bridge_sidecar_filename(target));
 
@@ -93,13 +85,14 @@ fn build_bridge_sidecar(manifest_dir: &Path, target: &str, profile: &str) {
 }
 
 fn main() {
-    #[cfg(target_os = "macos")]
-    println!("cargo:rustc-link-search=framework=/System/Library/PrivateFrameworks");
-
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
     let target = env::var("TARGET").expect("missing TARGET");
     let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+
+    if target.contains("apple-darwin") {
+        println!("cargo:rustc-link-search=framework=/System/Library/PrivateFrameworks");
+    }
 
     println!("cargo:rustc-env=YORLING_TARGET_TRIPLE={target}");
     build_bridge_sidecar(&manifest_dir, &target, &profile);

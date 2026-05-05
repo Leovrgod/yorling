@@ -5909,6 +5909,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tokio",
  "url",
+ "windows-sys 0.61.2",
  "yorling-core",
  "yorling-engine",
  "yorling-island-core",

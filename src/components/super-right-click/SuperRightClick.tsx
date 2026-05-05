@@ -78,10 +78,14 @@ function fallbackTerminal(): DetectedTerminalApp {
   };
 }
 
-export function useSuperRightClickStartupRestore() {
+export function useSuperRightClickStartupRestore(enabled = true) {
   const restoredRef = useRef(false);
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
     if (restoredRef.current || !readAutoStart()) {
       return;
     }
@@ -94,7 +98,7 @@ export function useSuperRightClickStartupRestore() {
         // The settings page will surface extension enablement details when opened.
       }
     })();
-  }, []);
+  }, [enabled]);
 }
 
 export function SuperRightClick() {

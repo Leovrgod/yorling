@@ -148,6 +148,32 @@ test('surfaces screen recording permission guidance in the top-right controls', 
   assert.strictEqual(libSource.includes('commands::keyboard::open_screen_recording_settings'), true);
 });
 
+test('limits the Windows shell to the keyboard module and hides macOS permission controls when not required', () => {
+  const appSource = readFileSync('src/App.tsx', 'utf8');
+  const sidebarSource = readFileSync('src/components/common/Sidebar.tsx', 'utf8');
+  const platformSource = readFileSync('src/utils/platform.ts', 'utf8');
+  const keyboardSource = readFileSync('src/components/keyboard/KeyboardMapping.tsx', 'utf8');
+  const commandSource = readFileSync('src-tauri/src/commands/keyboard.rs', 'utf8');
+
+  assert.strictEqual(platformSource.includes("if (platform === 'windows')"), true);
+  assert.strictEqual(platformSource.includes("return ['keyboard'];"), true);
+  assert.strictEqual(appSource.includes('getEnabledModulesForPlatform(platform)'), true);
+  assert.strictEqual(appSource.includes('isModuleEnabledOnPlatform(activeModule, platform)'), true);
+  assert.strictEqual(appSource.includes('useEmbeddedTerminalEvents(shouldEnableMacOnlyBackgroundModules)'), true);
+  assert.strictEqual(appSource.includes('useSuperRightClickStartupRestore(shouldEnableMacOnlyBackgroundModules)'), true);
+  assert.strictEqual(appSource.includes('requiresAccessibility ? ('), true);
+  assert.strictEqual(appSource.includes('requiresScreenRecording ? ('), true);
+  assert.strictEqual(sidebarSource.includes('visibleModules.map'), true);
+  assert.strictEqual(keyboardSource.includes('getKeyboardMappingRules(platform)'), true);
+  assert.strictEqual(keyboardSource.includes('windowsUnavailableTitle'), true);
+  assert.strictEqual(commandSource.includes('WindowsKeyboardInterceptor'), true);
+  assert.strictEqual(commandSource.includes('platform: "windows"'), true);
+  assert.strictEqual(commandSource.includes('interception_supported: true'), true);
+  assert.strictEqual(commandSource.includes('WindowsKeyboardInterceptor::is_running_elevated()'), true);
+  assert.strictEqual(commandSource.includes('requires_accessibility: false'), true);
+  assert.strictEqual(commandSource.includes('requires_screen_recording: false'), true);
+});
+
 test('declares real palette selectors for each app theme', () => {
   const variablesSource = readFileSync('src/styles/nothing/variables.css', 'utf8');
 

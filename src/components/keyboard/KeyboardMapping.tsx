@@ -7,13 +7,15 @@ import { useKeyboardStore } from '../../stores/keyboardStore';
 import { MiniToggle } from '../common/MiniToggle';
 import {
   buildKeyboardLayerViews,
+  getKeyboardLayoutRows,
   getLocalizedRuleTexts,
-  KEYBOARD_LAYOUT_ROWS,
   type KeyboardLayerId,
   type KeyboardLayerView,
   type KeyboardLayoutKey,
 } from './keyboardUiModel';
 import { getKeyboardTextClasses } from './keyboardKeyMetrics';
+import { getKeyboardMappingRules } from './keyboardMappingData';
+import { detectYorlingPlatform } from '../../utils/platform';
 
 function KeyboardKey({
   keyItem,
@@ -65,10 +67,16 @@ export function KeyboardMapping() {
   const copy = getUiCopy(language);
   const { status, rules } = useKeyboardStore();
   const { startInterceptor, setEnabled, openAccessibilitySettings } = useKeyboardService();
+  const platform = status.platform === 'unknown' ? detectYorlingPlatform() : status.platform;
+  const platformRules = useMemo(
+    () => platform === 'windows' ? getKeyboardMappingRules(platform) : rules,
+    [platform, rules],
+  );
+  const keyboardRows = useMemo(() => getKeyboardLayoutRows(platform), [platform]);
 
   const { layers, otherRules } = useMemo(
-    () => buildKeyboardLayerViews(rules, language),
-    [language, rules],
+    () => buildKeyboardLayerViews(platformRules, language, platform),
+    [language, platform, platformRules],
   );
   const [activeLayerId, setActiveLayerId] = useState<KeyboardLayerId>('space');
 
@@ -81,6 +89,15 @@ export function KeyboardMapping() {
   const activeLayer = layers.find((layer) => layer.id === activeLayerId) ?? layers[0];
   const otherRuleIds = otherRules.map((rule) => rule.id);
   const areOtherMappingsEnabled = otherRuleIds.every((ruleId) => !disabledRules.includes(ruleId));
+  const canStartEngine = status.interception_supported
+    && (!status.requires_accessibility || status.has_accessibility);
+  const shouldShowAccessibilityAlert = status.platform !== 'unknown'
+    && status.requires_accessibility
+    && !status.has_accessibility;
+  const shouldShowUnsupportedAlert = status.platform !== 'unknown' && !status.interception_supported;
+  const shouldShowWindowsElevationAlert = status.platform === 'windows'
+    && status.interception_supported
+    && status.elevation_limited;
 
   const handleStartEngine = async () => {
     try {
@@ -106,7 +123,7 @@ export function KeyboardMapping() {
             <button
               className="btn btn-primary"
               onClick={handleStartEngine}
-              disabled={!status.has_accessibility}
+              disabled={!canStartEngine}
               type="button"
             >
               {copy.keyboard.start}
@@ -114,7 +131,22 @@ export function KeyboardMapping() {
           </div>
         ) : null}
 
-        {!status.has_accessibility ? (
+        {shouldShowUnsupportedAlert ? (
+          <div className="mapping-alert">
+            <div className="mapping-alert-copy">
+              <span className="mapping-alert-icon">!</span>
+              <div>
+                <div className="mapping-alert-title">{copy.keyboard.windowsUnavailableTitle}</div>
+                <div className="text-xs text-secondary">{copy.keyboard.windowsUnavailableDescription}</div>
+              </div>
+            </div>
+            <button className="btn btn-primary" disabled type="button">
+              {copy.keyboard.windowsUnavailableAction}
+            </button>
+          </div>
+        ) : null}
+
+        {shouldShowAccessibilityAlert ? (
           <div className="mapping-alert">
             <div className="mapping-alert-copy">
               <span className="mapping-alert-icon">⚠</span>
@@ -126,6 +158,18 @@ export function KeyboardMapping() {
             <button className="btn btn-primary" onClick={openAccessibilitySettings} type="button">
               {copy.keyboard.permissionAction}
             </button>
+          </div>
+        ) : null}
+
+        {shouldShowWindowsElevationAlert ? (
+          <div className="mapping-alert">
+            <div className="mapping-alert-copy">
+              <span className="mapping-alert-icon">!</span>
+              <div>
+                <div className="mapping-alert-title">{copy.keyboard.windowsElevationTitle}</div>
+                <div className="text-xs text-secondary">{copy.keyboard.windowsElevationDescription}</div>
+              </div>
+            </div>
           </div>
         ) : null}
 
@@ -190,7 +234,7 @@ export function KeyboardMapping() {
 
             <div className="keyboard-viewport">
               <div className="keyboard-surface">
-                {KEYBOARD_LAYOUT_ROWS.map((row, rowIndex) => (
+                {keyboardRows.map((row, rowIndex) => (
                   <div key={rowIndex} className="keyboard-row">
                     {row.map((keyItem) => (
                       <KeyboardKey
@@ -227,6 +271,7 @@ export function KeyboardMapping() {
         </div>
       </section>
 
+      {otherRules.length > 0 ? (
       <div className="mapping-bottom-grid">
         <section className="card">
           <div className="card-header other-mappings-header">
@@ -267,6 +312,7 @@ export function KeyboardMapping() {
           </div>
         </section>
       </div>
+      ) : null}
     </div>
   );
 }

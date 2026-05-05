@@ -8,6 +8,8 @@ use std::sync::{
 use tauri::{Emitter, State};
 use yorling_engine::engine::SystemAction;
 
+#[cfg(target_os = "windows")]
+use crate::windows_keyboard::WindowsKeyboardInterceptor;
 #[cfg(target_os = "macos")]
 use core_graphics::access::ScreenCaptureAccess;
 #[cfg(target_os = "macos")]
@@ -20,6 +22,11 @@ pub struct EngineStatus {
     pub event_count: u64,
     pub has_accessibility: bool,
     pub has_screen_recording: bool,
+    pub platform: &'static str,
+    pub interception_supported: bool,
+    pub requires_accessibility: bool,
+    pub requires_screen_recording: bool,
+    pub elevation_limited: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -33,6 +40,8 @@ pub struct InterceptorState {
     bracket_overlay: BracketOverlayManager,
     #[cfg(target_os = "macos")]
     interceptor: KeyboardInterceptor,
+    #[cfg(target_os = "windows")]
+    interceptor: WindowsKeyboardInterceptor,
     #[cfg(target_os = "macos")]
     music_suppression_owns_interceptor: AtomicBool,
 }
@@ -44,6 +53,8 @@ impl InterceptorState {
             bracket_overlay: BracketOverlayManager::new(),
             #[cfg(target_os = "macos")]
             interceptor: KeyboardInterceptor::new(),
+            #[cfg(target_os = "windows")]
+            interceptor: WindowsKeyboardInterceptor::new(),
             #[cfg(target_os = "macos")]
             music_suppression_owns_interceptor: AtomicBool::new(false),
         }
@@ -79,6 +90,24 @@ impl InterceptorState {
                         key_down,
                     };
                     let _ = app_handle_for_music.emit("music-native-key", payload);
+                });
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let bracket_overlay = self.bracket_overlay.clone();
+            self.interceptor
+                .set_system_action_handler(move |action| match action {
+                    SystemAction::BracketModeChanged { .. } => bracket_overlay.dispatch(action),
+                    // Windows handles mouse actions in the hook thread. The custom macOS
+                    // Alt+Tab overlay is intentionally disabled on Windows.
+                    SystemAction::MouseMove { .. }
+                    | SystemAction::MouseClick { .. }
+                    | SystemAction::MouseScroll { .. }
+                    | SystemAction::MouseModeChanged { .. }
+                    | SystemAction::AltTabCycle { .. }
+                    | SystemAction::AltTabCommit
+                    | SystemAction::AltTabCancel => {}
                 });
         }
     }
@@ -125,7 +154,12 @@ pub async fn start_interceptor(state: State<'_, Arc<InterceptorState>>) -> Resul
         state.interceptor.start()?;
         Ok("Interceptor started".into())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        state.interceptor.start()?;
+        Ok("Interceptor started".into())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = state;
         Err("Keyboard interception not supported on this platform yet".into())
@@ -142,7 +176,12 @@ pub async fn stop_interceptor(state: State<'_, Arc<InterceptorState>>) -> Result
         state.interceptor.stop();
         Ok("Interceptor stopped".into())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        state.interceptor.stop();
+        Ok("Interceptor stopped".into())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = state;
         Err("Not supported on this platform".into())
@@ -164,7 +203,12 @@ pub async fn set_enabled(
         state.interceptor.set_enabled(enabled);
         Ok(())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        state.interceptor.set_enabled(enabled);
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (state, enabled);
         Err("Not supported on this platform".into())
@@ -198,7 +242,12 @@ pub async fn set_music_native_keys_suppressed(
         }
         Ok(())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (state, suppressed);
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (state, suppressed);
         Err("Not supported on this platform".into())
@@ -215,17 +264,46 @@ pub async fn get_status(state: State<'_, Arc<InterceptorState>>) -> Result<Engin
             event_count: state.interceptor.event_count(),
             has_accessibility: KeyboardInterceptor::has_accessibility_permission(),
             has_screen_recording: ScreenCaptureAccess::default().preflight(),
+            platform: "macos",
+            interception_supported: true,
+            requires_accessibility: true,
+            requires_screen_recording: true,
+            elevation_limited: false,
         })
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        Ok(EngineStatus {
+            running: state.interceptor.is_running(),
+            enabled: state.interceptor.is_enabled(),
+            event_count: state.interceptor.event_count(),
+            has_accessibility: true,
+            has_screen_recording: false,
+            platform: "windows",
+            interception_supported: true,
+            requires_accessibility: false,
+            requires_screen_recording: false,
+            elevation_limited: !WindowsKeyboardInterceptor::is_running_elevated(),
+        })
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = state;
         Ok(EngineStatus {
             running: false,
             enabled: false,
             event_count: 0,
-            has_accessibility: false,
+            has_accessibility: cfg!(windows),
             has_screen_recording: false,
+            platform: if cfg!(target_os = "linux") {
+                "linux"
+            } else {
+                "unknown"
+            },
+            interception_supported: false,
+            requires_accessibility: false,
+            requires_screen_recording: false,
+            elevation_limited: false,
         })
     }
 }
@@ -238,7 +316,7 @@ pub async fn check_accessibility() -> Result<bool, String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        Ok(false)
+        Ok(cfg!(windows))
     }
 }
 
@@ -250,7 +328,7 @@ pub async fn request_accessibility() -> Result<bool, String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        Ok(false)
+        Ok(cfg!(windows))
     }
 }
 

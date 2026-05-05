@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   disable as disableAutostart,
   enable as enableAutostart,
@@ -29,6 +29,11 @@ import { useKeyboardStore } from './stores/keyboardStore';
 import { THEME_OPTIONS } from './theme/themeOptions';
 import type { AppLanguageId, AppThemeId } from './types';
 import { toggleWindowZoom } from './utils/windowControls';
+import {
+  detectYorlingPlatform,
+  getEnabledModulesForPlatform,
+  isModuleEnabledOnPlatform,
+} from './utils/platform';
 
 const MusicKeyboard = lazy(() =>
   import('./components/music/MusicKeyboard').then((m) => ({ default: m.MusicKeyboard })),
@@ -404,6 +409,8 @@ function WorkspaceHeader({
   engineRunning,
   hasAccessibility,
   hasScreenRecording,
+  requiresAccessibility,
+  requiresScreenRecording,
   language,
   onOpenAccessibility,
   onOpenScreenRecording,
@@ -412,6 +419,8 @@ function WorkspaceHeader({
   engineRunning: boolean;
   hasAccessibility: boolean;
   hasScreenRecording: boolean;
+  requiresAccessibility: boolean;
+  requiresScreenRecording: boolean;
   language: AppLanguageId;
   onOpenAccessibility: () => void;
   onOpenScreenRecording: () => void;
@@ -429,22 +438,26 @@ function WorkspaceHeader({
             {engineRunning ? copy.sidebar.activeStatus : copy.sidebar.inactiveStatus}
           </span>
         </span>
-        <PermissionStatusToggle
-          label={copy.statusbar.accessibility}
-          granted={hasAccessibility}
-          grantedLabel={copy.statusbar.granted}
-          missingLabel={copy.statusbar.missing}
-          settingsLabel={copy.statusbar.openAccessibilitySettings}
-          onOpenSettings={onOpenAccessibility}
-        />
-        <PermissionStatusToggle
-          label={copy.statusbar.screenRecording}
-          granted={hasScreenRecording}
-          grantedLabel={copy.statusbar.granted}
-          missingLabel={copy.statusbar.missing}
-          settingsLabel={copy.statusbar.openScreenRecordingSettings}
-          onOpenSettings={onOpenScreenRecording}
-        />
+        {requiresAccessibility ? (
+          <PermissionStatusToggle
+            label={copy.statusbar.accessibility}
+            granted={hasAccessibility}
+            grantedLabel={copy.statusbar.granted}
+            missingLabel={copy.statusbar.missing}
+            settingsLabel={copy.statusbar.openAccessibilitySettings}
+            onOpenSettings={onOpenAccessibility}
+          />
+        ) : null}
+        {requiresScreenRecording ? (
+          <PermissionStatusToggle
+            label={copy.statusbar.screenRecording}
+            granted={hasScreenRecording}
+            grantedLabel={copy.statusbar.granted}
+            missingLabel={copy.statusbar.missing}
+            settingsLabel={copy.statusbar.openScreenRecordingSettings}
+            onOpenSettings={onOpenScreenRecording}
+          />
+        ) : null}
       </div>
     </header>
   );
@@ -461,12 +474,20 @@ function MainApp() {
   } = useAppStore();
   const { status } = useKeyboardStore();
   const { openAccessibilitySettings, openScreenRecordingSettings } = useKeyboardService();
-  const [terminalModuleMounted, setTerminalModuleMounted] = useState(activeModule === 'terminals');
+  const platform = status.platform === 'unknown' ? detectYorlingPlatform() : status.platform;
+  const enabledModules = useMemo(() => getEnabledModulesForPlatform(platform), [platform]);
+  const activePlatformModule = isModuleEnabledOnPlatform(activeModule, platform)
+    ? activeModule
+    : 'keyboard';
+  const shouldEnableMacOnlyBackgroundModules = platform !== 'windows';
+  const [terminalModuleMounted, setTerminalModuleMounted] = useState(
+    activePlatformModule === 'terminals',
+  );
 
   useKeyboardPolling();
   useKeyboardStartupRestore();
-  useEmbeddedTerminalEvents();
-  useSuperRightClickStartupRestore();
+  useEmbeddedTerminalEvents(shouldEnableMacOnlyBackgroundModules);
+  useSuperRightClickStartupRestore(shouldEnableMacOnlyBackgroundModules);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -485,13 +506,19 @@ function MainApp() {
   }, []);
 
   useEffect(() => {
-    if (activeModule === 'terminals') {
+    if (activeModule !== activePlatformModule) {
+      setActiveModule(activePlatformModule);
+    }
+  }, [activeModule, activePlatformModule, setActiveModule]);
+
+  useEffect(() => {
+    if (activePlatformModule === 'terminals') {
       setTerminalModuleMounted(true);
     }
-  }, [activeModule]);
+  }, [activePlatformModule]);
 
   const renderTransientModule = () => {
-    switch (activeModule) {
+    switch (activePlatformModule) {
       case 'keyboard':
         return <KeyboardMapping />;
       case 'music':
@@ -517,7 +544,8 @@ function MainApp() {
   return (
     <div className="app-shell">
       <Sidebar
-        activeModule={activeModule}
+        activeModule={activePlatformModule}
+        enabledModules={enabledModules}
         onModuleChange={setActiveModule}
         windowControls={<WindowControls language={language} />}
       />
@@ -527,6 +555,8 @@ function MainApp() {
           engineRunning={status.running}
           hasAccessibility={hasAccessibility}
           hasScreenRecording={hasScreenRecording}
+          requiresAccessibility={status.platform !== 'unknown' && status.requires_accessibility}
+          requiresScreenRecording={status.platform !== 'unknown' && status.requires_screen_recording}
           language={language}
           onOpenAccessibility={() => void openAccessibilitySettings()}
           onOpenScreenRecording={() => void openScreenRecordingSettings()}
@@ -542,7 +572,7 @@ function MainApp() {
         <ErrorBanner />
         <main className="app-content">
           <div className="app-module-stack">
-            {activeModule !== 'terminals' ? (
+            {activePlatformModule !== 'terminals' ? (
               <div className="app-module app-module-active">
                 {renderTransientModule()}
               </div>
@@ -550,9 +580,9 @@ function MainApp() {
             {terminalModuleMounted ? (
               <div
                 className={`app-module app-module-persistent ${
-                  activeModule === 'terminals' ? 'app-module-active' : 'app-module-hidden'
+                  activePlatformModule === 'terminals' ? 'app-module-active' : 'app-module-hidden'
                 }`}
-                aria-hidden={activeModule === 'terminals' ? undefined : true}
+                aria-hidden={activePlatformModule === 'terminals' ? undefined : true}
               >
                 <Suspense fallback={<div className="module-loading" />}>
                   <MultiTerminal />
