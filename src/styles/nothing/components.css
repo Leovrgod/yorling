@@ -33,6 +33,7 @@
 }
 
 .workspace-header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -43,6 +44,19 @@
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--color-bg-elevated) 85%, transparent), transparent 100%);
   user-select: none;
+}
+
+.workspace-header-with-window-controls {
+  padding-right: 150px;
+}
+
+.workspace-header-window-controls {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  height: 32px;
 }
 
 .workspace-header-copy {
@@ -924,6 +938,69 @@ body.sidebar-resizing .sidebar-divider::before {
 .window-controls:hover .window-control-icon,
 .window-control:focus-visible .window-control-icon {
   opacity: 1;
+}
+
+.window-controls-windows {
+  height: 32px;
+  gap: 0;
+  transform: none;
+}
+
+.window-controls-windows .window-control {
+  inline-size: 46px;
+  block-size: 32px;
+  border-radius: 0;
+  color: var(--color-text-secondary);
+  background: transparent;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.window-controls-windows .window-control::before {
+  display: none;
+}
+
+.window-controls-windows .window-control:hover,
+.window-controls-windows .window-control:focus-visible {
+  background: color-mix(in srgb, var(--color-text) 8%, transparent);
+  color: var(--color-text);
+}
+
+.window-controls-windows .window-control.close:hover,
+.window-controls-windows .window-control.close:focus-visible {
+  background: #c42b1c;
+  color: #ffffff;
+}
+
+.window-controls-windows .window-control-icon {
+  inline-size: 11px;
+  block-size: 11px;
+  color: currentColor;
+  opacity: 1;
+  transform: none;
+}
+
+.window-controls-windows .window-control-icon::before,
+.window-controls-windows .window-control-icon::after {
+  width: 11px;
+  height: 1.25px;
+  border-radius: 0;
+  background: currentColor;
+}
+
+.window-controls-windows .window-control.minimize .window-control-icon::before {
+  transform: translate(-50%, 2px);
+}
+
+.window-controls-windows .window-control.zoom .window-control-icon::before {
+  width: 10px;
+  height: 10px;
+  border: 1.4px solid currentColor;
+  background: none;
+  transform: translate(-50%, -50%);
+}
+
+.window-controls-windows .window-control.zoom .window-control-icon::after {
+  display: none;
 }
 
 .language-switcher,

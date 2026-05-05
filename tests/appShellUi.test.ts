@@ -17,7 +17,7 @@ test('keeps draggable regions inside the two-column shell without custom zoom ho
   const appSource = readFileSync('src/App.tsx', 'utf8');
   const sidebarSource = readFileSync('src/components/common/Sidebar.tsx', 'utf8');
 
-  assert.strictEqual(appSource.includes('className="workspace-header" data-tauri-drag-region'), true);
+  assert.strictEqual(appSource.includes('className={`workspace-header'), true);
   assert.strictEqual(sidebarSource.includes('className="sidebar-window-strip" data-tauri-drag-region'), true);
   assert.strictEqual(appSource.includes('onDoubleClick={handleTitlebarDoubleClick}'), false);
   assert.strictEqual((appSource.match(/data-tauri-drag-region/g)?.length ?? 0) >= 1, true);
@@ -111,6 +111,21 @@ test('clips the transparent shell corners and matches native traffic-light geome
   assert.strictEqual(componentsSource.includes('.window-control-icon::before'), true);
   assert.strictEqual(appSource.includes('className="window-control-icon" aria-hidden="true" />'), true);
   assert.strictEqual(componentsSource.includes('margin-left: -6px;'), false);
+});
+
+test('uses Windows-style top-right rectangular controls on Windows', () => {
+  const appSource = readFileSync('src/App.tsx', 'utf8');
+  const componentsSource = readFileSync('src/styles/nothing/components.css', 'utf8');
+
+  assert.strictEqual(appSource.includes("platform === 'windows' ? null"), true);
+  assert.strictEqual(appSource.includes('workspace-header-window-controls'), true);
+  assert.strictEqual(appSource.includes("['minimize', 'zoom', 'close']"), true);
+  assert.strictEqual(componentsSource.includes('.workspace-header-window-controls'), true);
+  assert.strictEqual(componentsSource.includes('.window-controls-windows'), true);
+  assert.strictEqual(componentsSource.includes('inline-size: 46px;'), true);
+  assert.strictEqual(componentsSource.includes('block-size: 32px;'), true);
+  assert.strictEqual(componentsSource.includes('border-radius: 0;'), true);
+  assert.strictEqual(componentsSource.includes('background: #c42b1c;'), true);
 });
 
 test('keeps language and theme controls in the top-right action cluster instead of the sidebar footer', () => {

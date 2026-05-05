@@ -33,6 +33,7 @@ import {
   detectYorlingPlatform,
   getEnabledModulesForPlatform,
   isModuleEnabledOnPlatform,
+  type YorlingPlatform,
 } from './utils/platform';
 
 const MusicKeyboard = lazy(() =>
@@ -292,8 +293,20 @@ function StartupToggle({ language }: { language: AppLanguageId }) {
   );
 }
 
-function WindowControls({ language }: { language: AppLanguageId }) {
+type WindowControlKind = 'close' | 'minimize' | 'zoom';
+
+function WindowControls({
+  language,
+  platform,
+}: {
+  language: AppLanguageId;
+  platform: YorlingPlatform;
+}) {
   const copy = getUiCopy(language);
+  const isWindows = platform === 'windows';
+  const controlOrder: WindowControlKind[] = isWindows
+    ? ['minimize', 'zoom', 'close']
+    : ['close', 'minimize', 'zoom'];
 
   const handleClose = async () => {
     try {
@@ -319,38 +332,44 @@ function WindowControls({ language }: { language: AppLanguageId }) {
     }
   };
 
+  const handleControlClick = (kind: WindowControlKind) => {
+    switch (kind) {
+      case 'close':
+        void handleClose();
+        break;
+      case 'minimize':
+        void handleMinimize();
+        break;
+      case 'zoom':
+        void handleZoom();
+        break;
+    }
+  };
+
+  const controlLabels: Record<WindowControlKind, string> = {
+    close: copy.titlebar.closeWindow,
+    minimize: copy.titlebar.minimizeWindow,
+    zoom: copy.titlebar.zoomWindow,
+  };
+
   return (
-    <div className="window-controls">
-      <button
-        type="button"
-        className="window-control close"
-        title={copy.titlebar.closeWindow}
-        aria-label={copy.titlebar.closeWindow}
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => { e.stopPropagation(); void handleClose(); }}
-      >
-        <span className="window-control-icon" aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        className="window-control minimize"
-        title={copy.titlebar.minimizeWindow}
-        aria-label={copy.titlebar.minimizeWindow}
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => { e.stopPropagation(); void handleMinimize(); }}
-      >
-        <span className="window-control-icon" aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        className="window-control zoom"
-        title={copy.titlebar.zoomWindow}
-        aria-label={copy.titlebar.zoomWindow}
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => { e.stopPropagation(); void handleZoom(); }}
-      >
-        <span className="window-control-icon" aria-hidden="true" />
-      </button>
+    <div className={`window-controls ${isWindows ? 'window-controls-windows' : 'window-controls-macos'}`}>
+      {controlOrder.map((kind) => (
+        <button
+          key={kind}
+          type="button"
+          className={`window-control ${kind}`}
+          title={controlLabels[kind]}
+          aria-label={controlLabels[kind]}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleControlClick(kind);
+          }}
+        >
+          <span className="window-control-icon" aria-hidden="true" />
+        </button>
+      ))}
     </div>
   );
 }
@@ -415,6 +434,7 @@ function WorkspaceHeader({
   onOpenAccessibility,
   onOpenScreenRecording,
   utilityControls,
+  windowControls,
 }: {
   engineRunning: boolean;
   hasAccessibility: boolean;
@@ -425,11 +445,15 @@ function WorkspaceHeader({
   onOpenAccessibility: () => void;
   onOpenScreenRecording: () => void;
   utilityControls: ReactNode;
+  windowControls?: ReactNode;
 }) {
   const copy = getUiCopy(language);
 
   return (
-    <header className="workspace-header" data-tauri-drag-region>
+    <header
+      className={`workspace-header ${windowControls ? 'workspace-header-with-window-controls' : ''}`}
+      data-tauri-drag-region
+    >
       <div className="workspace-header-actions" data-no-window-drag>
         {utilityControls}
         <span className={`workspace-status-chip ${engineRunning ? 'is-active' : ''}`}>
@@ -459,6 +483,11 @@ function WorkspaceHeader({
           />
         ) : null}
       </div>
+      {windowControls ? (
+        <div className="workspace-header-window-controls" data-no-window-drag>
+          {windowControls}
+        </div>
+      ) : null}
     </header>
   );
 }
@@ -547,7 +576,7 @@ function MainApp() {
         activeModule={activePlatformModule}
         enabledModules={enabledModules}
         onModuleChange={setActiveModule}
-        windowControls={<WindowControls language={language} />}
+        windowControls={platform === 'windows' ? null : <WindowControls language={language} platform={platform} />}
       />
       <SidebarDivider />
       <section className="workspace-pane">
@@ -568,6 +597,9 @@ function MainApp() {
               <ThemeSwitcher theme={theme} setTheme={setTheme} language={language} />
             </>
           )}
+          windowControls={
+            platform === 'windows' ? <WindowControls language={language} platform={platform} /> : null
+          }
         />
         <ErrorBanner />
         <main className="app-content">

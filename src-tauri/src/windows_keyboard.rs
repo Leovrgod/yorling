@@ -5,9 +5,8 @@ use std::ffi::c_void;
 use std::mem;
 use std::ptr;
 use std::sync::{
-    Arc, Mutex, OnceLock,
     atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering},
-    mpsc,
+    mpsc, Arc, Mutex, OnceLock,
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -16,23 +15,23 @@ use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, MOUSEEVENTF_LEFTDOWN,
-    MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
-    MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT, SendInput, VK_0, VK_1, VK_2,
-    VK_3, VK_4, VK_5, VK_6, VK_7, VK_8, VK_9, VK_A, VK_B, VK_BACK, VK_C, VK_CONTROL, VK_D, VK_DOWN,
-    VK_E, VK_END, VK_ESCAPE, VK_F, VK_G, VK_H, VK_HOME, VK_I, VK_J, VK_K, VK_L, VK_LCONTROL,
-    VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_M, VK_MENU, VK_N, VK_O, VK_OEM_1, VK_OEM_2, VK_OEM_3,
-    VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_P,
-    VK_Q, VK_R, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_S, VK_SHIFT,
-    VK_SPACE, VK_T, VK_TAB, VK_U, VK_UP, VK_V, VK_W, VK_X, VK_Y, VK_Z,
+    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP,
+    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
+    MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT, VK_0,
+    VK_1, VK_2, VK_3, VK_4, VK_5, VK_6, VK_7, VK_8, VK_9, VK_A, VK_B, VK_BACK, VK_C, VK_CONTROL,
+    VK_D, VK_DOWN, VK_E, VK_END, VK_ESCAPE, VK_F, VK_G, VK_H, VK_HOME, VK_I, VK_J, VK_K, VK_L,
+    VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_M, VK_MENU, VK_N, VK_O, VK_OEM_1,
+    VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD,
+    VK_OEM_PLUS, VK_P, VK_Q, VK_R, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN,
+    VK_S, VK_SHIFT, VK_SPACE, VK_T, VK_TAB, VK_U, VK_UP, VK_V, VK_W, VK_X, VK_Y, VK_Z,
 };
 use windows_sys::Win32::UI::Shell::IsUserAnAdmin;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetMessageW, HC_ACTION, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT,
-    PM_NOREMOVE, PeekMessageW, PostThreadMessageW, SetWindowsHookExW, TranslateMessage,
-    UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
-    WM_MBUTTONDOWN, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER, WM_XBUTTONDOWN,
-    XBUTTON1,
+    CallNextHookEx, DispatchMessageW, GetMessageW, PeekMessageW, PostThreadMessageW,
+    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT,
+    LLKHF_ALTDOWN, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN,
+    WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WM_USER, WM_XBUTTONDOWN, XBUTTON1,
 };
 use yorling_core::keycode::{self, VirtualKeyCode};
 use yorling_engine::engine::{
@@ -437,6 +436,12 @@ unsafe extern "system" fn low_level_keyboard_proc(
     let Some(context) = current_hook_context() else {
         return unsafe { CallNextHookEx(ptr::null_mut(), n_code, w_param, l_param) };
     };
+
+    if is_native_alt_tab_event(&context, keyboard.vkCode as u16, key_down, keyboard.flags) {
+        clear_native_alt_tab_state(&context);
+        return unsafe { CallNextHookEx(ptr::null_mut(), n_code, w_param, l_param) };
+    }
+
     let Some(keycode) = windows_vk_to_internal(keyboard.vkCode as u16) else {
         return unsafe { CallNextHookEx(ptr::null_mut(), n_code, w_param, l_param) };
     };
@@ -468,6 +473,51 @@ unsafe extern "system" fn low_level_keyboard_proc(
         1
     } else {
         unsafe { CallNextHookEx(ptr::null_mut(), n_code, w_param, l_param) }
+    }
+}
+
+fn is_native_alt_tab_event(
+    context: &HookContext,
+    vk_code: u16,
+    key_down: bool,
+    keyboard_flags: u32,
+) -> bool {
+    if !key_down || vk_code != VK_TAB {
+        return false;
+    }
+
+    if keyboard_flags & LLKHF_ALTDOWN != 0 {
+        return true;
+    }
+
+    let physical_keys = context.physical_keys.lock().unwrap();
+    physical_keys.contains(&(VirtualKeyCode::Option as u16))
+        || physical_keys.contains(&(VirtualKeyCode::RightOption as u16))
+}
+
+fn clear_native_alt_tab_state(context: &HookContext) {
+    {
+        let mut physical_keys = context.physical_keys.lock().unwrap();
+        physical_keys.remove(&(VirtualKeyCode::Option as u16));
+        physical_keys.remove(&(VirtualKeyCode::RightOption as u16));
+        physical_keys.remove(&(VirtualKeyCode::Tab as u16));
+    }
+
+    context.mouse_motion.stop_motion();
+
+    let (bracket_action, mouse_action) = match context.engine.lock() {
+        Ok(mut engine) => {
+            engine.cancel_alt_tab_session();
+            (engine.cancel_bracket_mode(), engine.cancel_mouse_mode())
+        }
+        Err(_) => return,
+    };
+
+    if let Some(action) = bracket_action {
+        dispatch_system_action(context, action);
+    }
+    if let Some(action) = mouse_action {
+        dispatch_system_action(context, action);
     }
 }
 

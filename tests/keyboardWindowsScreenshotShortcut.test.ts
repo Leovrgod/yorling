@@ -56,3 +56,19 @@ test('keeps Windows startup scoped to the keyboard module without the island ove
   assert.strictEqual(libSource.includes('cfg!(target_os = "macos")'), true);
   assert.strictEqual(libSource.includes('Skipping island runtime on this platform'), true);
 });
+
+test('bypasses native Windows Alt+Tab before keyboard mapping state can stick', () => {
+  const windowsKeyboardSource = readFileSync('src-tauri/src/windows_keyboard.rs', 'utf8');
+
+  assert.strictEqual(windowsKeyboardSource.includes('LLKHF_ALTDOWN'), true);
+  assert.strictEqual(windowsKeyboardSource.includes('fn is_native_alt_tab_event'), true);
+  assert.strictEqual(windowsKeyboardSource.includes('fn clear_native_alt_tab_state'), true);
+  assert.match(
+    windowsKeyboardSource,
+    /if is_native_alt_tab_event\(&context, keyboard\.vkCode as u16, key_down, keyboard\.flags\)\s*\{\s*clear_native_alt_tab_state\(&context\);\s*return unsafe \{ CallNextHookEx/s,
+  );
+  assert.match(
+    windowsKeyboardSource,
+    /physical_keys\.remove\(&\(VirtualKeyCode::Option as u16\)\);[\s\S]*physical_keys\.remove\(&\(VirtualKeyCode::Tab as u16\)\);/,
+  );
+});
