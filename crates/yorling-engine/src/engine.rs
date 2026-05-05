@@ -1048,6 +1048,39 @@ impl MappingEngine {
                     ));
                 }
 
+                // U/O → enter mouse mode and scroll immediately.
+                if let Some(direction) = Self::is_mouse_scroll_key(keycode) {
+                    self.mouse_mode = MouseModeState::Active;
+                    self.tab_held_in_mouse_mode = true;
+                    self.mouse_held_keys.insert(keycode);
+                    return MouseModeResult::Handled(EngineAction::System(
+                        SystemAction::MouseScroll { direction },
+                    ));
+                }
+
+                // C → enter mouse mode and trigger the platform sidebar shortcut.
+                if matches!(VirtualKeyCode::from_raw(keycode), Some(VirtualKeyCode::C)) {
+                    self.mouse_mode = MouseModeState::Active;
+                    self.tab_held_in_mouse_mode = true;
+                    self.mouse_held_keys.insert(keycode);
+                    return MouseModeResult::Handled(Self::shortcut_action(
+                        self.mouse_sidebar_shortcut_keycode,
+                        self.mouse_sidebar_shortcut_flags,
+                    ));
+                }
+
+                // M → enter mouse mode and right-click immediately.
+                if matches!(VirtualKeyCode::from_raw(keycode), Some(VirtualKeyCode::M)) {
+                    self.mouse_mode = MouseModeState::Active;
+                    self.tab_held_in_mouse_mode = true;
+                    self.mouse_held_keys.insert(keycode);
+                    return MouseModeResult::Handled(EngineAction::System(
+                        SystemAction::MouseClick {
+                            button: MouseButton::Right,
+                        },
+                    ));
+                }
+
                 // Any other key → cancel, emit Tab tap + triggering key as synthetics.
                 // Same approach as bracket mode fallback: emit both keys as
                 // synthetic events and track them in replayed_keys for key-up.
@@ -3470,6 +3503,76 @@ mod tests {
         ));
         assert!(matches!(
             engine.process_key(tab(), false, false, 0),
+            EngineAction::Suppress
+        ));
+    }
+
+    #[test]
+    fn mouse_mode_tab_then_u_enters_active_and_scrolls() {
+        let mut engine = MappingEngine::new();
+        engine.set_enabled(true);
+
+        engine.process_key(tab(), true, false, 0);
+
+        assert_system(
+            &engine.process_key(u_key(), true, false, 0),
+            SystemAction::MouseScroll {
+                direction: MouseScrollDirection::Up,
+            },
+        );
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
+
+        assert_system(
+            &engine.process_key(u_key(), true, true, 0),
+            SystemAction::MouseScroll {
+                direction: MouseScrollDirection::Up,
+            },
+        );
+        assert!(matches!(
+            engine.process_key(u_key(), false, false, 0),
+            EngineAction::Suppress
+        ));
+    }
+
+    #[test]
+    fn mouse_mode_tab_then_m_enters_active_and_clicks_right() {
+        let mut engine = MappingEngine::new();
+        engine.set_enabled(true);
+
+        engine.process_key(tab(), true, false, 0);
+
+        assert_system(
+            &engine.process_key(m(), true, false, 0),
+            SystemAction::MouseClick {
+                button: MouseButton::Right,
+            },
+        );
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
+
+        assert!(matches!(
+            engine.process_key(m(), false, false, 0),
+            EngineAction::Suppress
+        ));
+    }
+
+    #[test]
+    fn windows_mouse_mode_tab_then_c_uses_ctrl_b_without_prior_move() {
+        let mut engine = MappingEngine::new_for_platform(MappingPlatform::Windows);
+        engine.set_enabled(true);
+
+        engine.process_key(tab(), true, false, 0);
+
+        assert_emit_with_flags(
+            &engine.process_key(c_key(), true, false, 0),
+            &[
+                (b(), true, keycode::FLAG_CONTROL),
+                (b(), false, keycode::FLAG_CONTROL),
+            ],
+        );
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
+
+        assert!(matches!(
+            engine.process_key(c_key(), false, false, 0),
             EngineAction::Suppress
         ));
     }

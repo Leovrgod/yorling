@@ -28,9 +28,11 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::Shell::IsUserAnAdmin;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetMessageW, HC_ACTION, KBDLLHOOKSTRUCT, MSG, PM_NOREMOVE,
-    PeekMessageW, PostThreadMessageW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx,
-    WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER, XBUTTON1,
+    CallNextHookEx, DispatchMessageW, GetMessageW, HC_ACTION, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT,
+    PM_NOREMOVE, PeekMessageW, PostThreadMessageW, SetWindowsHookExW, TranslateMessage,
+    UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
+    WM_MBUTTONDOWN, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER, WM_XBUTTONDOWN,
+    XBUTTON1,
 };
 use yorling_core::keycode::{self, VirtualKeyCode};
 use yorling_engine::engine::{
@@ -176,6 +178,7 @@ pub struct WindowsKeyboardInterceptor {
     context: Arc<HookContext>,
     running: Arc<AtomicBool>,
     hook_handle: Arc<AtomicPtr<c_void>>,
+    mouse_hook_handle: Arc<AtomicPtr<c_void>>,
     hook_thread_id: Arc<AtomicU32>,
     worker: Mutex<Option<thread::JoinHandle<()>>>,
 }
@@ -186,6 +189,7 @@ impl WindowsKeyboardInterceptor {
             context: Arc::new(HookContext::new()),
             running: Arc::new(AtomicBool::new(false)),
             hook_handle: Arc::new(AtomicPtr::new(ptr::null_mut())),
+            mouse_hook_handle: Arc::new(AtomicPtr::new(ptr::null_mut())),
             hook_thread_id: Arc::new(AtomicU32::new(0)),
             worker: Mutex::new(None),
         }
@@ -214,6 +218,7 @@ impl WindowsKeyboardInterceptor {
         let context = Arc::clone(&self.context);
         let running = Arc::clone(&self.running);
         let hook_handle = Arc::clone(&self.hook_handle);
+        let mouse_hook_handle = Arc::clone(&self.mouse_hook_handle);
         let hook_thread_id = Arc::clone(&self.hook_thread_id);
         let (startup_tx, startup_rx) = mpsc::channel::<Result<(), String>>();
 
@@ -244,6 +249,8 @@ impl WindowsKeyboardInterceptor {
             }
 
             hook_handle.store(hook, Ordering::SeqCst);
+            let mouse_hook = SetWindowsHookExW(WH_MOUSE_LL, Some(low_level_mouse_proc), module, 0);
+            mouse_hook_handle.store(mouse_hook, Ordering::SeqCst);
             running.store(true, Ordering::SeqCst);
             let _ = startup_tx.send(Ok(()));
 
@@ -263,8 +270,12 @@ impl WindowsKeyboardInterceptor {
             }
 
             UnhookWindowsHookEx(hook);
+            if !mouse_hook.is_null() {
+                UnhookWindowsHookEx(mouse_hook);
+            }
             set_hook_context(None);
             hook_handle.store(ptr::null_mut(), Ordering::SeqCst);
+            mouse_hook_handle.store(ptr::null_mut(), Ordering::SeqCst);
             hook_thread_id.store(0, Ordering::SeqCst);
             running.store(false, Ordering::SeqCst);
         });
@@ -377,6 +388,32 @@ fn current_hook_context() -> Option<Arc<HookContext>> {
     hook_context_slot().lock().unwrap().clone()
 }
 
+unsafe extern "system" fn low_level_mouse_proc(
+    n_code: i32,
+    w_param: WPARAM,
+    l_param: LPARAM,
+) -> LRESULT {
+    if n_code != HC_ACTION as i32 {
+        return unsafe { CallNextHookEx(ptr::null_mut(), n_code, w_param, l_param) };
+    }
+
+    let mouse = unsafe { &*(l_param as *const MSLLHOOKSTRUCT) };
+    if mouse.dwExtraInfo == SELF_INJECTED_TAG {
+        return unsafe { CallNextHookEx(ptr::null_mut(), n_code, w_param, l_param) };
+    }
+
+    if matches!(
+        w_param as u32,
+        WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
+    ) {
+        if let Some(context) = current_hook_context() {
+            cancel_transient_modes_for_mouse_down(&context);
+        }
+    }
+
+    unsafe { CallNextHookEx(ptr::null_mut(), n_code, w_param, l_param) }
+}
+
 unsafe extern "system" fn low_level_keyboard_proc(
     n_code: i32,
     w_param: WPARAM,
@@ -431,6 +468,24 @@ unsafe extern "system" fn low_level_keyboard_proc(
         1
     } else {
         unsafe { CallNextHookEx(ptr::null_mut(), n_code, w_param, l_param) }
+    }
+}
+
+fn cancel_transient_modes_for_mouse_down(context: &HookContext) {
+    if !context.enabled.load(Ordering::Relaxed) {
+        return;
+    }
+
+    let (bracket_action, mouse_action) = match context.engine.lock() {
+        Ok(mut engine) => (engine.cancel_bracket_mode(), engine.cancel_mouse_mode()),
+        Err(_) => return,
+    };
+
+    if let Some(action) = bracket_action {
+        dispatch_system_action(context, action);
+    }
+    if let Some(action) = mouse_action {
+        dispatch_system_action(context, action);
     }
 }
 
