@@ -270,6 +270,7 @@
   display: flex;
   flex-direction: column;
   color: rgba(255, 255, 255, 0.92);
+  height: 100%;
   min-height: 0;
   overflow: hidden;
   border-radius: 0 0 20px 20px;
@@ -280,6 +281,7 @@
   align-items: flex-start;
   justify-content: space-between;
   flex-wrap: wrap;
+  flex: 0 0 auto;
   padding: 12px 12px 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
@@ -360,8 +362,10 @@
 }
 
 .island-session-list__body {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
-  max-height: calc(100vh - 170px);
+  max-height: none;
   padding: 10px 10px 12px;
   display: flex;
   flex-direction: column;
@@ -980,8 +984,9 @@
 .island-chatview {
   display: flex;
   flex-direction: column;
+  height: 100%;
   min-height: 0;
-  max-height: calc(100vh - 108px);
+  max-height: none;
   overflow: hidden;
   border-radius: 0 0 22px 22px;
 }
@@ -990,6 +995,7 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
+  flex: 0 0 auto;
   gap: 8px;
   padding: 10px 8px 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
@@ -1079,6 +1085,7 @@
 }
 
 .island-chatview__task {
+  flex: 0 0 auto;
   padding: 6px 8px 4px;
   font-size: 11px;
   font-weight: 500;
@@ -1091,7 +1098,7 @@
 .island-chatview__body {
   flex: 1 1 auto;
   min-height: 0;
-  max-height: calc(100vh - 190px);
+  max-height: none;
   overflow-y: auto;
   padding: 8px 8px 14px;
   display: flex;
@@ -1969,6 +1976,7 @@
 .island-content-transition {
   position: relative;
   width: 100%;
+  height: 100%;
   overflow: hidden;
   border-radius: 0 0 calc(var(--island-bottom-radius, 24px) - 2px)
     calc(var(--island-bottom-radius, 24px) - 2px);
@@ -1976,6 +1984,8 @@
 
 .island-content-surface {
   width: 100%;
+  height: 100%;
+  min-height: 0;
   will-change: transform, opacity, filter;
 }
 

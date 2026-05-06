@@ -42,11 +42,19 @@ test('keeps the collapsed island defaults and width stable', () => {
   assert.strictEqual(metrics.height, 32);
 });
 
-test('uses a flat top edge for Windows-style top bar placement', () => {
+test('uses a flat top edge only when a real top inset is reserved', () => {
   const topBarMetrics = getIslandSurfaceMetrics({
     progress: 0,
     sessionCount: 0,
-    screenInfo: makeScreenInfo({ placement_mode: 'top_bar' }),
+    screenInfo: makeScreenInfo({ placement_mode: 'top_bar', top_inset: 32 }),
+    openReason: null,
+    panelMode: 'sessions',
+    measuredExpandedHeight: null,
+  });
+  const floatingTopBarMetrics = getIslandSurfaceMetrics({
+    progress: 0,
+    sessionCount: 0,
+    screenInfo: makeScreenInfo({ placement_mode: 'top_bar', top_inset: 0 }),
     openReason: null,
     panelMode: 'sessions',
     measuredExpandedHeight: null,
@@ -61,6 +69,7 @@ test('uses a flat top edge for Windows-style top bar placement', () => {
   });
 
   assert.strictEqual(topBarMetrics.topRadius, 0);
+  assert.ok(floatingTopBarMetrics.topRadius > 0);
   assert.ok(notchMetrics.topRadius > 0);
 });
 

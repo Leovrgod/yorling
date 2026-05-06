@@ -12,6 +12,7 @@ import { ApprovalRulesPanel } from './components/ApprovalRulesPanel';
 import { CompletionToast } from './components/CompletionToast';
 import { getIslandSurfaceMetrics } from './notchGeometry';
 import { filterCollapsedIslandSessions, isAttentionSession } from './sessionQueue';
+import { detectYorlingPlatform } from '../utils/platform';
 import {
   promoteIslandOpenReasonForInternalInteraction,
   resolveExpandedPanelHeight,
@@ -69,6 +70,7 @@ export function IslandContent({ sessions }: IslandContentProps) {
   const transitionInteractionGuardUntilRef = useRef(0);
   const contentTransitionTimersRef = useRef<number[]>([]);
   const previousContentModeRef = useRef(contentMode);
+  const usesBoundedNativeWindowRef = useRef(detectYorlingPlatform() === 'windows');
   const [expandedView, setExpandedView] = useState<ExpandedView>('sessions');
   const [contentPhase, setContentPhase] = useState<ContentPhase>('idle');
   const [contentTransitionDirection, setContentTransitionDirection] =
@@ -202,7 +204,10 @@ export function IslandContent({ sessions }: IslandContentProps) {
           const nextHeight = resolveExpandedPanelHeight({
             activeSurfaceScrollHeight: activeSurfaceNode.scrollHeight,
             activeSurfaceOffsetHeight: activeSurfaceNode.offsetHeight,
-            activeInnerScrollHeight: observedChild?.scrollHeight ?? 0,
+            activeInnerScrollHeight: Math.max(
+              observedChild?.scrollHeight ?? 0,
+              measureNestedScrollablePanelHeight(activeSurfaceNode),
+            ),
             previousMeasuredHeight: previous,
           });
 
@@ -349,25 +354,27 @@ export function IslandContent({ sessions }: IslandContentProps) {
     };
 
     const handleWindowMouseLeave = () => {
-      // On macOS NonactivatingPanel windows, clicking inside the island
-      // can trigger spurious mouseleave events due to focus routing.
-      // Validate against last known mouse position before collapsing.
-      const node = notchRef.current;
-      if (node) {
-        const rect = node.getBoundingClientRect();
-        const guardActive = Date.now() < transitionInteractionGuardUntilRef.current;
-        const stillInside =
-          isPointInsideRect(lastPointerPositionRef.current.x, lastPointerPositionRef.current.y, rect, contentPhase === 'transitioning' ? 18 : 8)
-          || (guardActive
-            && previousNotchRectRef.current !== null
-            && isPointInsideRect(
-              lastPointerPositionRef.current.x,
-              lastPointerPositionRef.current.y,
-              previousNotchRectRef.current,
-              18,
-            ));
-        if (stillInside) {
-          return;
+      if (!usesBoundedNativeWindowRef.current) {
+        // On macOS NonactivatingPanel windows, clicking inside the island
+        // can trigger spurious mouseleave events due to focus routing.
+        // Validate against last known mouse position before collapsing.
+        const node = notchRef.current;
+        if (node) {
+          const rect = node.getBoundingClientRect();
+          const guardActive = Date.now() < transitionInteractionGuardUntilRef.current;
+          const stillInside =
+            isPointInsideRect(lastPointerPositionRef.current.x, lastPointerPositionRef.current.y, rect, contentPhase === 'transitioning' ? 18 : 8)
+            || (guardActive
+              && previousNotchRectRef.current !== null
+              && isPointInsideRect(
+                lastPointerPositionRef.current.x,
+                lastPointerPositionRef.current.y,
+                previousNotchRectRef.current,
+                18,
+              ));
+          if (stillInside) {
+            return;
+          }
         }
       }
 
@@ -458,7 +465,11 @@ export function IslandContent({ sessions }: IslandContentProps) {
     : 1;
   const showExpandedLayer = expandedVisible;
   const showCollapsedLayer = isMorphingToCollapsed || collapsedOpacity > 0.005 || !expandedVisible;
-  const shouldAttachDomMouseLeave = shouldUseDomMouseLeave(viewMode, openReason);
+  const shouldAttachDomMouseLeave = shouldUseDomMouseLeave(
+    viewMode,
+    openReason,
+    usesBoundedNativeWindowRef.current,
+  );
 
   const handleSelectSession = (sessionId: string) => {
     // Upgrade openReason to 'click' so that the window-level pointer tracking
@@ -617,6 +628,25 @@ function isPointInsideRect(x: number, y: number, rect: DOMRect | { left: number;
     && x <= rect.right + margin
     && y >= rect.top - margin
     && y <= rect.bottom + margin;
+}
+
+function measureNestedScrollablePanelHeight(root: HTMLElement) {
+  const sessionList = root.querySelector<HTMLElement>('.island-session-list');
+  if (sessionList) {
+    const header = sessionList.querySelector<HTMLElement>('.island-session-list__header');
+    const body = sessionList.querySelector<HTMLElement>('.island-session-list__body');
+    return (header?.offsetHeight ?? 0) + (body?.scrollHeight ?? 0);
+  }
+
+  const chatView = root.querySelector<HTMLElement>('.island-chatview');
+  if (chatView) {
+    const header = chatView.querySelector<HTMLElement>('.island-chatview__header');
+    const task = chatView.querySelector<HTMLElement>('.island-chatview__task');
+    const body = chatView.querySelector<HTMLElement>('.island-chatview__body');
+    return (header?.offsetHeight ?? 0) + (task?.offsetHeight ?? 0) + (body?.scrollHeight ?? 0);
+  }
+
+  return 0;
 }
 
 function estimateExpandedHeight({

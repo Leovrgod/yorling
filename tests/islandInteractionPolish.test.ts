@@ -37,15 +37,17 @@ test('pins a hover-opened expanded island when the user clicks inside it', () =>
   );
 });
 
-test('lets island panels use viewport-driven height caps and lifts the tutorial results card upward', () => {
+test('lets island panels scroll inside the native island bounds and lifts the tutorial results card upward', () => {
   const islandStyles = readFileSync('src/styles/nothing/island.css', 'utf8');
   const geometrySource = readFileSync('src/island/notchGeometry.ts', 'utf8');
   const tutorialStyles = readFileSync('src/styles/nothing/music.css', 'utf8');
 
   assert.ok(!islandStyles.includes('max-height: min(420px, calc(100vh - 170px));'));
   assert.ok(!islandStyles.includes('max-height: min(360px, calc(100vh - 220px));'));
-  assert.ok(islandStyles.includes('max-height: calc(100vh - 170px);'));
-  assert.ok(islandStyles.includes('max-height: calc(100vh - 190px);'));
+  assert.ok(islandStyles.includes('.island-session-list'));
+  assert.ok(islandStyles.includes('.island-session-list__body'));
+  assert.ok(islandStyles.includes('flex: 1 1 auto;'));
+  assert.ok(islandStyles.includes('max-height: none;'));
   assert.ok(geometrySource.includes('DEFAULT_CHATVIEW_HEIGHT = 340'));
   assert.ok(tutorialStyles.includes('padding: 24px 18px 56px;'));
 });

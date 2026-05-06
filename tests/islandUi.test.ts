@@ -30,6 +30,8 @@ test('keeps island host sizing and hover-open panels sticky only while hovered',
   );
   assert.ok(islandContentSource.includes('ResizeObserver'));
   assert.ok(islandContentSource.includes('scrollHeight'));
+  assert.ok(islandContentSource.includes('measureNestedScrollablePanelHeight'));
+  assert.ok(islandContentSource.includes('usesBoundedNativeWindowRef'));
   assert.ok(!islandContentSource.includes('getBoundingClientRect().height'));
   assert.ok(islandRustSource.includes('const ISLAND_WINDOW_HEIGHT: f64 = 750.0;'));
   assert.ok(islandRustSource.includes('const FALLBACK_CLOSED_WIDTH: f64 = 266.0;'));
@@ -206,7 +208,8 @@ test('uses directional panel transitions and adaptive chat body sizing inside th
   assert.ok(islandContentSource.includes('transitioningFrom'));
   assert.ok(islandStyles.includes('.island-content-surface--forward-enter'));
   assert.ok(islandStyles.includes('.island-content-surface--back-exit'));
-  assert.ok(islandStyles.includes('max-height: calc(100vh - 190px);'));
+  assert.ok(islandStyles.includes('.island-chatview'));
+  assert.ok(islandStyles.includes('max-height: none;'));
   assert.ok(geometrySource.includes('DEFAULT_CHATVIEW_HEIGHT'));
   assert.ok(geometrySource.includes('ISLAND_EXPANDED_WIDE_MAX_WIDTH = 680'));
 });

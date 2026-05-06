@@ -13,8 +13,9 @@ test('does not redundantly re-expand the island when selecting a session from an
   assert.strictEqual(shouldExpandForSessionSelection('collapsed'), true);
 });
 
-test('does not use DOM mouseleave to collapse a hover-opened expanded island', () => {
+test('uses DOM mouseleave for bounded Windows island windows but not macOS full-width panels', () => {
   assert.strictEqual(shouldUseDomMouseLeave('expanded', 'hover'), false);
+  assert.strictEqual(shouldUseDomMouseLeave('expanded', 'hover', true), true);
   assert.strictEqual(shouldUseDomMouseLeave('collapsed', 'hover'), true);
   assert.strictEqual(shouldUseDomMouseLeave('expanded', 'click'), true);
 });
