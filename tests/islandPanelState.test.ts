@@ -4,6 +4,7 @@ import {
   promoteIslandOpenReasonForInternalInteraction,
   resolveExpandedPanelHeight,
   shouldAutoCollapseExpandedIsland,
+  shouldCollapseOnPointerLeave,
   shouldUseDomMouseLeave,
   shouldExpandForSessionSelection,
 } from '../src/island/panelState.ts';
@@ -13,11 +14,20 @@ test('does not redundantly re-expand the island when selecting a session from an
   assert.strictEqual(shouldExpandForSessionSelection('collapsed'), true);
 });
 
-test('uses DOM mouseleave for bounded Windows island windows but not macOS full-width panels', () => {
+test('keeps expanded island mouseleave on native monitors instead of DOM hover events', () => {
   assert.strictEqual(shouldUseDomMouseLeave('expanded', 'hover'), false);
-  assert.strictEqual(shouldUseDomMouseLeave('expanded', 'hover', true), true);
+  assert.strictEqual(shouldUseDomMouseLeave('expanded', 'hover', true), false);
+  assert.strictEqual(shouldUseDomMouseLeave('expanded', 'click', true), false);
   assert.strictEqual(shouldUseDomMouseLeave('collapsed', 'hover'), true);
   assert.strictEqual(shouldUseDomMouseLeave('expanded', 'click'), true);
+});
+
+test('collapses pointer-opened panels on native pointer leave but keeps attention pinned', () => {
+  assert.strictEqual(shouldCollapseOnPointerLeave('hover'), true);
+  assert.strictEqual(shouldCollapseOnPointerLeave('click'), true);
+  assert.strictEqual(shouldCollapseOnPointerLeave('shortcut'), true);
+  assert.strictEqual(shouldCollapseOnPointerLeave('attention'), false);
+  assert.strictEqual(shouldCollapseOnPointerLeave(null), false);
 });
 
 test('promotes internal interaction on a hover-opened expanded island to click mode', () => {

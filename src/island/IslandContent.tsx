@@ -70,7 +70,11 @@ export function IslandContent({ sessions }: IslandContentProps) {
   const transitionInteractionGuardUntilRef = useRef(0);
   const contentTransitionTimersRef = useRef<number[]>([]);
   const previousContentModeRef = useRef(contentMode);
-  const usesBoundedNativeWindowRef = useRef(detectYorlingPlatform() === 'windows');
+  const platformRef = useRef(detectYorlingPlatform());
+  const usesBoundedNativeWindowRef = useRef(platformRef.current === 'windows');
+  const usesNativeHoverMonitorRef = useRef(
+    platformRef.current === 'macos' || platformRef.current === 'windows',
+  );
   const [expandedView, setExpandedView] = useState<ExpandedView>('sessions');
   const [contentPhase, setContentPhase] = useState<ContentPhase>('idle');
   const [contentTransitionDirection, setContentTransitionDirection] =
@@ -468,7 +472,7 @@ export function IslandContent({ sessions }: IslandContentProps) {
   const shouldAttachDomMouseLeave = shouldUseDomMouseLeave(
     viewMode,
     openReason,
-    usesBoundedNativeWindowRef.current,
+    usesNativeHoverMonitorRef.current,
   );
 
   const handleSelectSession = (sessionId: string) => {

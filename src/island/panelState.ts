@@ -15,9 +15,17 @@ export function shouldExpandForSessionSelection(viewMode: IslandViewMode) {
 export function shouldUseDomMouseLeave(
   viewMode: IslandViewMode,
   openReason: IslandOpenReason,
-  usesBoundedNativeWindow = false,
+  usesNativeHoverMonitor = false,
 ) {
-  return usesBoundedNativeWindow || viewMode !== 'expanded' || openReason !== 'hover';
+  if (usesNativeHoverMonitor && viewMode === 'expanded') {
+    return false;
+  }
+
+  return viewMode !== 'expanded' || openReason !== 'hover';
+}
+
+export function shouldCollapseOnPointerLeave(openReason: IslandOpenReason) {
+  return openReason === 'hover' || openReason === 'click' || openReason === 'shortcut';
 }
 
 export function shouldAutoCollapseExpandedIsland(hasAttentionRequest: boolean) {

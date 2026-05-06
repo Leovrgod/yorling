@@ -24,14 +24,12 @@ test('keeps island host sizing and hover-open panels sticky only while hovered',
   const islandPresentationSource = readFileSync('src/island/presentation.ts', 'utf8');
 
   assert.ok(islandAnimationSource.includes('const HOVER_OPEN_DELAY = 240'));
-  assert.ok(
-    islandAnimationSource.includes("if (viewMode !== 'expanded' || openReason !== 'hover') {") ||
-      islandAnimationSource.includes("if (viewMode !== 'expanded' || openReason !== 'hover') return;"),
-  );
+  assert.ok(islandAnimationSource.includes('shouldCollapseOnPointerLeave(openReason)'));
   assert.ok(islandContentSource.includes('ResizeObserver'));
   assert.ok(islandContentSource.includes('scrollHeight'));
   assert.ok(islandContentSource.includes('measureNestedScrollablePanelHeight'));
-  assert.ok(islandContentSource.includes('usesBoundedNativeWindowRef'));
+  assert.ok(islandContentSource.includes('usesNativeHoverMonitorRef'));
+  assert.ok(islandAnimationSource.includes('POINTER_LEAVE_COLLAPSE_DELAY'));
   assert.ok(!islandContentSource.includes('getBoundingClientRect().height'));
   assert.ok(islandRustSource.includes('const ISLAND_WINDOW_HEIGHT: f64 = 750.0;'));
   assert.ok(islandRustSource.includes('const FALLBACK_CLOSED_WIDTH: f64 = 266.0;'));

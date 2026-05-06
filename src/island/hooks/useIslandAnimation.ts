@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import type { IslandViewMode } from '../../types';
 import { useIslandStore } from '../store/islandStore';
+import { shouldCollapseOnPointerLeave } from '../panelState';
 
 export type IslandOpenReason =
   | 'click'
@@ -24,6 +25,7 @@ const BOUNCE_TARGET = 0.08;
 const SETTLE_DISTANCE = 0.0015;
 const SETTLE_VELOCITY = 0.01;
 const HOVER_OPEN_DELAY = 240;
+const POINTER_LEAVE_COLLAPSE_DELAY = 140;
 
 /**
  * Controls island expand/collapse animation and differentiates click, hover,
@@ -221,12 +223,15 @@ export function useIslandAnimation() {
   const handleMouseLeave = useCallback(() => {
     clearHoverOpenTimer();
 
-    if (viewMode !== 'expanded' || openReason !== 'hover') {
+    if (viewMode !== 'expanded' || !shouldCollapseOnPointerLeave(openReason)) {
       return;
     }
 
     clearAutoCollapseTimer();
-    collapse();
+    autoCollapseTimerRef.current = setTimeout(() => {
+      autoCollapseTimerRef.current = null;
+      collapse();
+    }, POINTER_LEAVE_COLLAPSE_DELAY);
   }, [clearAutoCollapseTimer, clearHoverOpenTimer, collapse, openReason, viewMode]);
 
   useEffect(() => {

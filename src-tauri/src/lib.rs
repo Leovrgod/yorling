@@ -226,6 +226,9 @@ pub fn run() {
                 // Start fullscreen monitor
                 island::start_fullscreen_monitor(app.handle());
 
+                #[cfg(target_os = "windows")]
+                island::start_windows_island_cursor_monitor(app.handle());
+
                 // Start screen change monitor (multi-monitor support)
                 island::start_screen_change_monitor(app.handle());
 

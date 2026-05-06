@@ -44,6 +44,10 @@ use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSSize};
 use std::cell::{Cell, RefCell};
 #[cfg(target_os = "macos")]
 use std::ptr::NonNull;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Foundation::{POINT, RECT};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
 
 // ─── State ───
 
@@ -56,6 +60,10 @@ const BRIDGE_TARGET_TRIPLE: &str = env!("YORLING_TARGET_TRIPLE");
 
 #[cfg(not(target_os = "macos"))]
 const TOP_BAR_ISLAND_MARGIN: f64 = 0.0;
+#[cfg(target_os = "windows")]
+const WINDOWS_ISLAND_CURSOR_POLL_MS: u64 = 50;
+#[cfg(target_os = "windows")]
+const WINDOWS_ISLAND_HOVER_PADDING: i32 = 6;
 
 #[cfg(all(windows, target_arch = "x86_64"))]
 const EMBEDDED_WINDOWS_BRIDGE: &[u8] =
@@ -853,6 +861,68 @@ fn configure_windows_island<R: Runtime>(window: &WebviewWindow<R>) {
     if let Err(error) = window.set_ignore_cursor_events(false) {
         log::warn!("Failed to enable Windows island cursor events: {error}");
     }
+}
+
+#[cfg(target_os = "windows")]
+pub fn start_windows_island_cursor_monitor<R: Runtime>(app: &tauri::AppHandle<R>) {
+    let app = app.clone();
+
+    tauri::async_runtime::spawn(async move {
+        let mut was_inside = false;
+
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_millis(
+                WINDOWS_ISLAND_CURSOR_POLL_MS,
+            ))
+            .await;
+
+            let Some(window) = app.get_webview_window("island") else {
+                was_inside = false;
+                continue;
+            };
+
+            let is_inside = window.is_visible().unwrap_or(false)
+                && windows_cursor_inside_window(&window, WINDOWS_ISLAND_HOVER_PADDING);
+
+            if is_inside == was_inside {
+                continue;
+            }
+
+            was_inside = is_inside;
+            let event_name = if is_inside {
+                "island-hover-trigger-enter"
+            } else {
+                "island-hover-trigger-leave"
+            };
+            let _ = window.emit(event_name, ());
+        }
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn windows_cursor_inside_window<R: Runtime>(window: &WebviewWindow<R>, padding: i32) -> bool {
+    let Ok(hwnd) = window.hwnd() else {
+        return false;
+    };
+
+    let mut point = POINT { x: 0, y: 0 };
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+
+    unsafe {
+        if GetCursorPos(&mut point) == 0 || GetWindowRect(hwnd.0, &mut rect) == 0 {
+            return false;
+        }
+    }
+
+    point.x >= rect.left - padding
+        && point.x <= rect.right + padding
+        && point.y >= rect.top - padding
+        && point.y <= rect.bottom + padding
 }
 
 #[cfg(target_os = "macos")]

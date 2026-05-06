@@ -13,6 +13,7 @@ test('enables the island module and runtime on Windows', () => {
   assert.ok(appSource.includes("case 'island':"));
   assert.ok(libSource.includes('cfg!(any(target_os = "macos", target_os = "windows"))'));
   assert.ok(libSource.includes('register_island_shortcuts(app.handle());'));
+  assert.ok(libSource.includes('start_windows_island_cursor_monitor(app.handle());'));
 });
 
 test('uses Windows named-pipe transport and a bounded top island window', () => {
@@ -24,6 +25,10 @@ test('uses Windows named-pipe transport and a bounded top island window', () => 
   assert.ok(islandSource.includes('configure_windows_island'));
   assert.ok(islandSource.includes('resize_windows_island_window'));
   assert.ok(islandSource.includes('position_windows_island_window'));
+  assert.ok(islandSource.includes('start_windows_island_cursor_monitor'));
+  assert.ok(islandSource.includes('windows_cursor_inside_window'));
+  assert.ok(islandSource.includes('GetCursorPos'));
+  assert.ok(islandSource.includes('GetWindowRect'));
   assert.ok(islandSource.includes('window.set_ignore_cursor_events(false)'));
   assert.ok(islandSource.includes('screen_info_from_monitor'));
   assert.ok(bridgeSource.includes('ERROR_PIPE_BUSY'));
