@@ -1,0 +1,40 @@
+{
+  "app": {
+    "windows": [
+      {
+        "title": "YORLING",
+        "width": 920,
+        "height": 620,
+        "minWidth": 720,
+        "minHeight": 500,
+        "decorations": false,
+        "center": true,
+        "visible": false,
+        "resizable": true,
+        "transparent": false
+      },
+      {
+        "label": "alt-tab-overlay",
+        "title": "Yorling Alt Tab",
+        "width": 1240,
+        "height": 560,
+        "decorations": false,
+        "center": true,
+        "visible": false,
+        "resizable": false,
+        "transparent": true
+      },
+      {
+        "label": "bracket-overlay",
+        "title": "Yorling Bracket Overlay",
+        "width": 270,
+        "height": 52,
+        "decorations": false,
+        "center": true,
+        "visible": false,
+        "resizable": false,
+        "transparent": true
+      }
+    ]
+  }
+}

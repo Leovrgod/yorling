@@ -51,6 +51,22 @@ html:has(body.main-window) {
   background: transparent;
 }
 
+body.main-window.platform-windows {
+  --window-radius: 0px;
+  --sidebar-curve-radius: 0px;
+}
+
+body.main-window.platform-windows,
+body.main-window.platform-windows #root {
+  background: var(--color-bg);
+  border-radius: 0;
+  clip-path: none;
+}
+
+html:has(body.main-window.platform-windows) {
+  background: var(--color-bg);
+}
+
 html:has(body.island-overlay-window) {
   background: transparent !important;
 }

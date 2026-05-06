@@ -87,7 +87,7 @@ test('extracts explicit macOS fullscreen handling for the green window control',
     appSource.includes("import { toggleWindowZoom } from './utils/windowControls';"),
     true,
   );
-  assert.strictEqual(appSource.includes('toggleWindowZoom(getCurrentWindow())'), true);
+  assert.strictEqual(appSource.includes('toggleWindowZoom(getCurrentWindow(), platform)'), true);
   assert.strictEqual(appSource.includes('toggleMaximize'), false);
 });
 
@@ -126,6 +126,34 @@ test('uses Windows-style top-right rectangular controls on Windows', () => {
   assert.strictEqual(componentsSource.includes('block-size: 32px;'), true);
   assert.strictEqual(componentsSource.includes('border-radius: 0;'), true);
   assert.strictEqual(componentsSource.includes('background: #c42b1c;'), true);
+});
+
+test('keeps Windows main window corners native and keeps zoom permissions usable', () => {
+  const appSource = readFileSync('src/App.tsx', 'utf8');
+  const resetSource = readFileSync('src/styles/nothing/reset.css', 'utf8');
+  const windowsConfig = JSON.parse(readFileSync('src-tauri/tauri.windows.conf.json', 'utf8'));
+  const capabilitySource = readFileSync('src-tauri/capabilities/default.json', 'utf8');
+  const cargoSource = readFileSync('src-tauri/Cargo.toml', 'utf8');
+  const libSource = readFileSync('src-tauri/src/lib.rs', 'utf8');
+  const windowSource = readFileSync('src-tauri/src/windows_window.rs', 'utf8');
+
+  assert.strictEqual(appSource.includes('const platformClass = `platform-${platform}`;'), true);
+  assert.strictEqual(resetSource.includes('body.main-window.platform-windows'), true);
+  assert.strictEqual(resetSource.includes('clip-path: none;'), true);
+  assert.strictEqual(windowsConfig.app.windows[0].transparent, false);
+  assert.strictEqual(windowsConfig.app.windows[1].transparent, true);
+  assert.strictEqual(windowsConfig.app.windows[2].transparent, true);
+  assert.strictEqual(cargoSource.includes('"Win32_Graphics_Dwm"'), true);
+  assert.strictEqual(libSource.includes('mod windows_window;'), true);
+  assert.strictEqual(libSource.includes('windows_window::configure_main_window(&window);'), true);
+  assert.strictEqual(windowSource.includes('DwmSetWindowAttribute'), true);
+  assert.strictEqual(windowSource.includes('DWMWA_WINDOW_CORNER_PREFERENCE'), true);
+  assert.strictEqual(windowSource.includes('DWMWCP_ROUND'), true);
+  assert.strictEqual(capabilitySource.includes('"core:window:allow-is-fullscreen"'), true);
+  assert.strictEqual(capabilitySource.includes('"core:window:allow-set-fullscreen"'), true);
+  assert.strictEqual(capabilitySource.includes('"core:window:allow-is-maximized"'), true);
+  assert.strictEqual(capabilitySource.includes('"core:window:allow-maximize"'), true);
+  assert.strictEqual(capabilitySource.includes('"core:window:allow-unmaximize"'), true);
 });
 
 test('keeps language and theme controls in the top-right action cluster instead of the sidebar footer', () => {

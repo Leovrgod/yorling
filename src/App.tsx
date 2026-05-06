@@ -348,7 +348,7 @@ function WindowControls({
 
   const handleZoom = async () => {
     try {
-      await toggleWindowZoom(getCurrentWindow());
+      await toggleWindowZoom(getCurrentWindow(), platform);
     } catch (error) {
       console.error('Failed to zoom the main window.', error);
     }
@@ -555,6 +555,15 @@ function MainApp() {
       document.body.classList.remove('main-window');
     };
   }, []);
+
+  useEffect(() => {
+    const platformClass = `platform-${platform}`;
+    document.body.classList.add(platformClass);
+
+    return () => {
+      document.body.classList.remove(platformClass);
+    };
+  }, [platform]);
 
   useEffect(() => {
     if (activeModule !== activePlatformModule) {

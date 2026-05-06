@@ -6,6 +6,8 @@ mod island;
 mod windows_keyboard;
 #[cfg(target_os = "windows")]
 mod windows_tray;
+#[cfg(target_os = "windows")]
+mod windows_window;
 
 use commands::autostart::launched_from_windows_autostart;
 use commands::clipboard::ClipboardState;
@@ -205,6 +207,11 @@ pub fn run() {
 
             let state = app.state::<Arc<InterceptorState>>();
             state.bind_app_handle(app.handle().clone());
+
+            #[cfg(target_os = "windows")]
+            if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+                windows_window::configure_main_window(&window);
+            }
 
             #[cfg(target_os = "windows")]
             if let Err(error) = windows_tray::setup(app.handle(), state.inner().clone()) {
