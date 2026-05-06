@@ -142,10 +142,39 @@ impl InterceptorState {
     pub fn alt_tab_app_icon_data_url(&self, owner_pid: i32) -> Option<String> {
         self.alt_tab.app_icon_data_url(owner_pid)
     }
+
+    #[cfg(target_os = "windows")]
+    pub fn windows_keyboard_mapping_active(&self) -> bool {
+        self.interceptor.is_running() && self.interceptor.is_enabled()
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn toggle_windows_keyboard_mapping(&self) -> Result<bool, String> {
+        if self.windows_keyboard_mapping_active() {
+            self.interceptor.set_enabled(false);
+            return Ok(false);
+        }
+
+        if self.interceptor.is_running() {
+            self.interceptor.set_enabled(true);
+        } else {
+            self.interceptor.start()?;
+        }
+
+        Ok(self.windows_keyboard_mapping_active())
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn shutdown_windows_keyboard_mapping(&self) {
+        self.interceptor.stop();
+    }
 }
 
 #[tauri::command]
-pub async fn start_interceptor(state: State<'_, Arc<InterceptorState>>) -> Result<String, String> {
+pub async fn start_interceptor(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    state: State<'_, Arc<InterceptorState>>,
+) -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
         state
@@ -157,6 +186,7 @@ pub async fn start_interceptor(state: State<'_, Arc<InterceptorState>>) -> Resul
     #[cfg(target_os = "windows")]
     {
         state.interceptor.start()?;
+        crate::windows_tray::refresh(&app, state.windows_keyboard_mapping_active());
         Ok("Interceptor started".into())
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -167,7 +197,10 @@ pub async fn start_interceptor(state: State<'_, Arc<InterceptorState>>) -> Resul
 }
 
 #[tauri::command]
-pub async fn stop_interceptor(state: State<'_, Arc<InterceptorState>>) -> Result<String, String> {
+pub async fn stop_interceptor(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    state: State<'_, Arc<InterceptorState>>,
+) -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
         state
@@ -179,6 +212,7 @@ pub async fn stop_interceptor(state: State<'_, Arc<InterceptorState>>) -> Result
     #[cfg(target_os = "windows")]
     {
         state.interceptor.stop();
+        crate::windows_tray::refresh(&app, state.windows_keyboard_mapping_active());
         Ok("Interceptor stopped".into())
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -190,6 +224,7 @@ pub async fn stop_interceptor(state: State<'_, Arc<InterceptorState>>) -> Result
 
 #[tauri::command]
 pub async fn set_enabled(
+    #[allow(unused_variables)] app: tauri::AppHandle,
     state: State<'_, Arc<InterceptorState>>,
     enabled: bool,
 ) -> Result<(), String> {
@@ -206,6 +241,7 @@ pub async fn set_enabled(
     #[cfg(target_os = "windows")]
     {
         state.interceptor.set_enabled(enabled);
+        crate::windows_tray::refresh(&app, state.windows_keyboard_mapping_active());
         Ok(())
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]

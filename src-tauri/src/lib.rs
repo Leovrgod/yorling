@@ -4,6 +4,8 @@ mod commands;
 mod island;
 #[cfg(target_os = "windows")]
 mod windows_keyboard;
+#[cfg(target_os = "windows")]
+mod windows_tray;
 
 use commands::clipboard::ClipboardState;
 use commands::keyboard::InterceptorState;
@@ -202,6 +204,11 @@ pub fn run() {
 
             let state = app.state::<Arc<InterceptorState>>();
             state.bind_app_handle(app.handle().clone());
+
+            #[cfg(target_os = "windows")]
+            if let Err(error) = windows_tray::setup(app.handle(), state.inner().clone()) {
+                log::warn!("Failed to initialize Windows tray controls: {error}");
+            }
 
             if should_start_island_runtime() {
                 // Create island window (non-async, safe in setup)

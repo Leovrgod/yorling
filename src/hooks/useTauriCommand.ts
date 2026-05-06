@@ -1,5 +1,6 @@
 import { useCallback, useRef, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { useKeyboardStore } from '../stores/keyboardStore';
 import type { EngineStatus } from '../types';
 
@@ -26,6 +27,30 @@ export function useKeyboardPolling() {
     pollingRef.current = setInterval(fetchStatus, 2000);
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
+    };
+  }, [fetchStatus]);
+
+  useEffect(() => {
+    let mounted = true;
+    let cleanup: (() => void) | null = null;
+
+    void listen<boolean>('keyboard-tray-status-changed', () => {
+      void fetchStatus();
+    })
+      .then((unlisten) => {
+        if (mounted) {
+          cleanup = unlisten;
+        } else {
+          unlisten();
+        }
+      })
+      .catch(() => {
+        // The tray event only exists in the desktop runtime.
+      });
+
+    return () => {
+      mounted = false;
+      cleanup?.();
     };
   }, [fetchStatus]);
 
