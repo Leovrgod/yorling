@@ -28,6 +28,7 @@ test('adapts layer targets to Windows-native editing semantics', () => {
   assert.strictEqual(byId.get('nav-n')?.to, 'End');
   assert.strictEqual(byId.get('nav-u')?.to, 'Ctrl+Left');
   assert.strictEqual(byId.get('nav-o')?.to, 'Ctrl+Right');
+  assert.strictEqual(byId.get('edit-w')?.to, 'Home→Select→Backspace');
   assert.strictEqual(byId.get('edit-r')?.to, 'Ctrl+Backspace');
   assert.strictEqual(byId.get('mouse-tab-c')?.to, 'Ctrl+B');
 });
@@ -40,9 +41,27 @@ test('renders supplemental shortcut mappings outside the primary keyboard layers
   assert.strictEqual(mappingSource.includes('otherRules.map'), true);
   assert.strictEqual(mappingSource.includes('运行状态'), false);
   assert.strictEqual(mappingSource.includes('Win + Shift + S'), false);
+  assert.strictEqual(mappingSource.includes('windowsElevationTitle'), false);
   assert.strictEqual(stylesSource.includes('--keyboard-unit'), true);
   assert.strictEqual(stylesSource.includes('overflow-x: auto;'), true);
   assert.strictEqual(stylesSource.includes('--keycap-bg-start'), true);
+});
+
+test('keeps Windows line-delete modifier held across the whole End key press', () => {
+  const windowsKeyboardSource = readFileSync('src-tauri/src/windows_keyboard.rs', 'utf8');
+  const copySource = readFileSync('src/i18n/copy.ts', 'utf8');
+
+  assert.strictEqual(copySource.includes('windowsElevationTitle'), false);
+  assert.strictEqual(windowsKeyboardSource.includes('fn emit_synthetic_key_press'), true);
+  assert.strictEqual(windowsKeyboardSource.includes('KEYEVENTF_EXTENDEDKEY'), true);
+  assert.match(
+    windowsKeyboardSource,
+    /emit_synthetic_key_press\(key\.keycode, desired_flags, physical_flags\);[\s\S]*index \+= 2;/,
+  );
+  assert.match(
+    windowsKeyboardSource,
+    /push_keyboard_input\(&mut inputs, vk, true\);\s*push_keyboard_input\(&mut inputs, vk, false\);\s*push_modifier_inputs\(&mut inputs, modifiers_to_press, false\);/,
+  );
 });
 
 test('keeps Windows startup scoped to keyboard, music, clipboard, and island modules', () => {

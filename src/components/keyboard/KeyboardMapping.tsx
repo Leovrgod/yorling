@@ -95,9 +95,6 @@ export function KeyboardMapping() {
     && status.requires_accessibility
     && !status.has_accessibility;
   const shouldShowUnsupportedAlert = status.platform !== 'unknown' && !status.interception_supported;
-  const shouldShowWindowsElevationAlert = status.platform === 'windows'
-    && status.interception_supported
-    && status.elevation_limited;
 
   const handleStartEngine = async () => {
     try {
@@ -158,18 +155,6 @@ export function KeyboardMapping() {
             <button className="btn btn-primary" onClick={openAccessibilitySettings} type="button">
               {copy.keyboard.permissionAction}
             </button>
-          </div>
-        ) : null}
-
-        {shouldShowWindowsElevationAlert ? (
-          <div className="mapping-alert">
-            <div className="mapping-alert-copy">
-              <span className="mapping-alert-icon">!</span>
-              <div>
-                <div className="mapping-alert-title">{copy.keyboard.windowsElevationTitle}</div>
-                <div className="text-xs text-secondary">{copy.keyboard.windowsElevationDescription}</div>
-              </div>
-            </div>
           </div>
         ) : null}
 

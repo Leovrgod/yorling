@@ -5,9 +5,8 @@ use std::ffi::c_void;
 use std::mem;
 use std::ptr;
 use std::sync::{
-    Arc, Mutex, OnceLock,
     atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering},
-    mpsc,
+    mpsc, Arc, Mutex, OnceLock,
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -16,27 +15,29 @@ use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, MOUSEEVENTF_LEFTDOWN,
-    MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
-    MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT, SendInput, VK_0, VK_1, VK_2,
-    VK_3, VK_4, VK_5, VK_6, VK_7, VK_8, VK_9, VK_A, VK_B, VK_BACK, VK_C, VK_CONTROL, VK_D, VK_DOWN,
-    VK_E, VK_END, VK_ESCAPE, VK_F, VK_G, VK_H, VK_HOME, VK_I, VK_J, VK_K, VK_L, VK_LCONTROL,
-    VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_M, VK_MENU, VK_N, VK_O, VK_OEM_1, VK_OEM_2, VK_OEM_3,
-    VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_P,
-    VK_Q, VK_R, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_S, VK_SHIFT,
-    VK_SPACE, VK_T, VK_TAB, VK_U, VK_UP, VK_V, VK_W, VK_X, VK_Y, VK_Z,
+    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
+    KEYEVENTF_KEYUP, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE,
+    MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN,
+    MOUSEEVENTF_XUP, MOUSEINPUT, VK_0, VK_1, VK_2, VK_3, VK_4, VK_5, VK_6, VK_7, VK_8, VK_9, VK_A,
+    VK_B, VK_BACK, VK_C, VK_CONTROL, VK_D, VK_DOWN, VK_E, VK_END, VK_ESCAPE, VK_F, VK_G, VK_H,
+    VK_HOME, VK_I, VK_J, VK_K, VK_L, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_M,
+    VK_MENU, VK_N, VK_O, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_COMMA,
+    VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_P, VK_Q, VK_R, VK_RCONTROL, VK_RETURN, VK_RIGHT,
+    VK_RMENU, VK_RSHIFT, VK_RWIN, VK_S, VK_SHIFT, VK_SPACE, VK_T, VK_TAB, VK_U, VK_UP, VK_V, VK_W,
+    VK_X, VK_Y, VK_Z,
 };
 use windows_sys::Win32::UI::Shell::IsUserAnAdmin;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetMessageW, HC_ACTION, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, MSG,
-    MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostThreadMessageW, SetWindowsHookExW,
-    TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP,
-    WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER,
-    WM_XBUTTONDOWN, XBUTTON1,
+    CallNextHookEx, DispatchMessageW, GetMessageW, PeekMessageW, PostThreadMessageW,
+    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT,
+    LLKHF_ALTDOWN, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN,
+    WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WM_USER, WM_XBUTTONDOWN, XBUTTON1,
 };
 use yorling_core::keycode::{self, VirtualKeyCode};
 use yorling_engine::engine::{
-    EngineAction, MappingEngine, MappingPlatform, MouseButton, MouseScrollDirection, SystemAction,
+    EngineAction, MappingEngine, MappingPlatform, MouseButton, MouseScrollDirection, SyntheticKey,
+    SystemAction,
 };
 
 const SELF_INJECTED_TAG: usize = 0x594F524C;
@@ -719,27 +720,11 @@ fn dispatch_engine_action(
         EngineAction::PassThrough => false,
         EngineAction::Suppress => true,
         EngineAction::Emit(keys) => {
-            for key in keys {
-                let desired_flags = if key.preserve_flags {
-                    physical_flags | key.extra_flags
-                } else {
-                    key.extra_flags
-                };
-                record_synthetic_modifier_restores(context, physical_flags & !desired_flags);
-                emit_synthetic_key(key.keycode, key.key_down, desired_flags, physical_flags);
-            }
+            dispatch_synthetic_keys(context, keys, physical_flags);
             true
         }
         EngineAction::EmitAndSystem(keys, system_action) => {
-            for key in keys {
-                let desired_flags = if key.preserve_flags {
-                    physical_flags | key.extra_flags
-                } else {
-                    key.extra_flags
-                };
-                record_synthetic_modifier_restores(context, physical_flags & !desired_flags);
-                emit_synthetic_key(key.keycode, key.key_down, desired_flags, physical_flags);
-            }
+            dispatch_synthetic_keys(context, keys, physical_flags);
             dispatch_system_action(context, system_action);
             true
         }
@@ -747,6 +732,37 @@ fn dispatch_engine_action(
             dispatch_system_action(context, system_action);
             true
         }
+    }
+}
+
+fn dispatch_synthetic_keys(context: &HookContext, keys: Vec<SyntheticKey>, physical_flags: u64) {
+    let mut index = 0;
+    while index < keys.len() {
+        let key = &keys[index];
+        let desired_flags = desired_flags_for_synthetic_key(key, physical_flags);
+        record_synthetic_modifier_restores(context, physical_flags & !desired_flags);
+
+        if key.key_down && index + 1 < keys.len() {
+            let next = &keys[index + 1];
+            let next_desired_flags = desired_flags_for_synthetic_key(next, physical_flags);
+            if !next.key_down && next.keycode == key.keycode && next_desired_flags == desired_flags
+            {
+                emit_synthetic_key_press(key.keycode, desired_flags, physical_flags);
+                index += 2;
+                continue;
+            }
+        }
+
+        emit_synthetic_key(key.keycode, key.key_down, desired_flags, physical_flags);
+        index += 1;
+    }
+}
+
+fn desired_flags_for_synthetic_key(key: &SyntheticKey, physical_flags: u64) -> u64 {
+    if key.preserve_flags {
+        physical_flags | key.extra_flags
+    } else {
+        key.extra_flags
     }
 }
 
@@ -808,6 +824,24 @@ fn emit_synthetic_key(keycode: u16, key_down: bool, desired_flags: u64, physical
     send_inputs(&mut inputs);
 }
 
+fn emit_synthetic_key_press(keycode: u16, desired_flags: u64, physical_flags: u64) {
+    let Some(vk) = internal_to_windows_vk(keycode) else {
+        return;
+    };
+
+    let modifiers_to_release = physical_flags & !desired_flags;
+    let modifiers_to_press = desired_flags & !physical_flags;
+    let mut inputs = Vec::new();
+
+    push_modifier_inputs(&mut inputs, modifiers_to_release, false);
+    push_modifier_inputs(&mut inputs, modifiers_to_press, true);
+    push_keyboard_input(&mut inputs, vk, true);
+    push_keyboard_input(&mut inputs, vk, false);
+    push_modifier_inputs(&mut inputs, modifiers_to_press, false);
+    push_modifier_inputs(&mut inputs, modifiers_to_release, true);
+    send_inputs(&mut inputs);
+}
+
 fn push_modifier_inputs(inputs: &mut Vec<INPUT>, flags: u64, key_down: bool) {
     const MODIFIER_KEYS: &[(u64, u16)] = &[
         (keycode::FLAG_COMMAND, VK_LWIN),
@@ -832,18 +866,30 @@ fn push_modifier_inputs(inputs: &mut Vec<INPUT>, flags: u64, key_down: bool) {
 }
 
 fn push_keyboard_input(inputs: &mut Vec<INPUT>, vk: u16, key_down: bool) {
+    let mut event_flags = if key_down { 0 } else { KEYEVENTF_KEYUP };
+    if is_extended_key(vk) {
+        event_flags |= KEYEVENTF_EXTENDEDKEY;
+    }
+
     inputs.push(INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
             ki: KEYBDINPUT {
                 wVk: vk,
                 wScan: 0,
-                dwFlags: if key_down { 0 } else { KEYEVENTF_KEYUP },
+                dwFlags: event_flags,
                 time: 0,
                 dwExtraInfo: SELF_INJECTED_TAG,
             },
         },
     });
+}
+
+fn is_extended_key(vk: u16) -> bool {
+    matches!(
+        vk,
+        VK_HOME | VK_END | VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN | VK_RCONTROL | VK_RMENU | VK_RWIN
+    )
 }
 
 fn push_mouse_input(inputs: &mut Vec<INPUT>, dx: i32, dy: i32, data: u32, flags: u32) {
