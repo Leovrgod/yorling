@@ -171,7 +171,7 @@ test('limits the Windows shell to supported modules and hides macOS permission c
   const commandSource = readFileSync('src-tauri/src/commands/keyboard.rs', 'utf8');
 
   assert.strictEqual(platformSource.includes("if (platform === 'windows')"), true);
-  assert.strictEqual(platformSource.includes("return ['keyboard', 'music', 'clipboard'];"), true);
+  assert.strictEqual(platformSource.includes("return ['keyboard', 'music', 'clipboard', 'island'];"), true);
   assert.strictEqual(appSource.includes('getEnabledModulesForPlatform(platform)'), true);
   assert.strictEqual(appSource.includes('isModuleEnabledOnPlatform(activeModule, platform)'), true);
   assert.strictEqual(appSource.includes('useEmbeddedTerminalEvents(shouldEnableMacOnlyBackgroundModules)'), true);

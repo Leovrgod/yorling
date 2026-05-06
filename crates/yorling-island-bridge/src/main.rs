@@ -245,13 +245,17 @@ async fn send_to_endpoint(
         use tokio::net::windows::named_pipe::ClientOptions;
 
         const ERROR_PIPE_BUSY: i32 = 231;
+        const PIPE_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
         let pipe_name = endpoint_path.to_string_lossy().into_owned();
+        let started_at = std::time::Instant::now();
 
         let client = loop {
             match ClientOptions::new().open(&pipe_name) {
                 Ok(client) => break client,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) if error.raw_os_error() == Some(ERROR_PIPE_BUSY) => {}
+                Err(error)
+                    if (error.kind() == std::io::ErrorKind::NotFound
+                        || error.raw_os_error() == Some(ERROR_PIPE_BUSY))
+                        && started_at.elapsed() < PIPE_CONNECT_TIMEOUT => {}
                 Err(error) => return Err(Box::new(error)),
             }
 

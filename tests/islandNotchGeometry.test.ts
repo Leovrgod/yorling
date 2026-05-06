@@ -42,6 +42,29 @@ test('keeps the collapsed island defaults and width stable', () => {
   assert.strictEqual(metrics.height, 32);
 });
 
+test('uses a flat top edge for Windows-style top bar placement', () => {
+  const topBarMetrics = getIslandSurfaceMetrics({
+    progress: 0,
+    sessionCount: 0,
+    screenInfo: makeScreenInfo({ placement_mode: 'top_bar' }),
+    openReason: null,
+    panelMode: 'sessions',
+    measuredExpandedHeight: null,
+  });
+  const notchMetrics = getIslandSurfaceMetrics({
+    progress: 0,
+    sessionCount: 0,
+    screenInfo: makeScreenInfo({ placement_mode: 'notch' }),
+    openReason: null,
+    panelMode: 'sessions',
+    measuredExpandedHeight: null,
+  });
+
+  assert.strictEqual(topBarMetrics.topRadius, 0);
+  assert.ok(notchMetrics.topRadius > 0);
+});
+
+
 test('keeps sessions and chat presentations on the optimized opened widths', () => {
   const screenInfo = makeScreenInfo({
     has_notch: true,

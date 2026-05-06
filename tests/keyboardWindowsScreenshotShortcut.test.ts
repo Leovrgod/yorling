@@ -45,15 +45,15 @@ test('renders supplemental shortcut mappings outside the primary keyboard layers
   assert.strictEqual(stylesSource.includes('--keycap-bg-start'), true);
 });
 
-test('keeps Windows startup scoped to the supported keyboard, music, and clipboard modules', () => {
+test('keeps Windows startup scoped to keyboard, music, clipboard, and island modules', () => {
   const appSource = readFileSync('src/App.tsx', 'utf8');
   const libSource = readFileSync('src-tauri/src/lib.rs', 'utf8');
 
-  assert.deepEqual(getEnabledModulesForPlatform('windows'), ['keyboard', 'music', 'clipboard']);
+  assert.deepEqual(getEnabledModulesForPlatform('windows'), ['keyboard', 'music', 'clipboard', 'island']);
   assert.strictEqual(appSource.includes('activePlatformModule'), true);
   assert.strictEqual(appSource.includes("setActiveModule(activePlatformModule)"), true);
   assert.strictEqual(libSource.includes('const fn should_start_island_runtime() -> bool'), true);
-  assert.strictEqual(libSource.includes('cfg!(target_os = "macos")'), true);
+  assert.strictEqual(libSource.includes('cfg!(any(target_os = "macos", target_os = "windows"))'), true);
   assert.strictEqual(libSource.includes('Skipping island runtime on this platform'), true);
 });
 

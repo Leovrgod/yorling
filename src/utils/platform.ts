@@ -43,7 +43,7 @@ export function detectYorlingPlatform(navigatorLike: Navigator = globalThis.navi
 
 export function getEnabledModulesForPlatform(platform: YorlingPlatform): ModuleName[] {
   if (platform === 'windows') {
-    return ['keyboard', 'music', 'clipboard'];
+    return ['keyboard', 'music', 'clipboard', 'island'];
   }
 
   return ALL_MODULES;

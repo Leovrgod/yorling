@@ -159,7 +159,7 @@ fn register_island_shortcuts<R: Runtime>(app: &tauri::AppHandle<R>) {
 }
 
 const fn should_start_island_runtime() -> bool {
-    cfg!(target_os = "macos")
+    cfg!(any(target_os = "macos", target_os = "windows"))
 }
 
 pub fn run() {
@@ -233,7 +233,7 @@ pub fn run() {
                 register_island_shortcuts(app.handle());
             } else {
                 log::info!(
-                    "Skipping island runtime on this platform; keyboard mapping stays active"
+                    "Skipping island runtime on this platform; no native island window is available"
                 );
             }
 
@@ -373,8 +373,11 @@ mod tests {
     };
 
     #[test]
-    fn island_runtime_starts_only_on_macos() {
-        assert_eq!(should_start_island_runtime(), cfg!(target_os = "macos"));
+    fn island_runtime_starts_on_native_overlay_platforms() {
+        assert_eq!(
+            should_start_island_runtime(),
+            cfg!(any(target_os = "macos", target_os = "windows"))
+        );
     }
 
     #[test]

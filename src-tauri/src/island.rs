@@ -3,7 +3,9 @@ use std::io::ErrorKind;
 #[cfg(target_os = "macos")]
 use std::os::raw::c_void;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(target_os = "macos")]
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -45,11 +47,19 @@ use std::ptr::NonNull;
 
 // ─── State ───
 
+#[cfg(not(target_os = "windows"))]
 const ISLAND_INITIAL_WINDOW_WIDTH: f64 = 1440.0;
 const ISLAND_WINDOW_HEIGHT: f64 = 750.0;
 const FALLBACK_CLOSED_WIDTH: f64 = 266.0;
 const FALLBACK_CLOSED_HEIGHT: f64 = 32.0;
 const BRIDGE_TARGET_TRIPLE: &str = env!("YORLING_TARGET_TRIPLE");
+
+#[cfg(not(target_os = "macos"))]
+const TOP_BAR_ISLAND_MARGIN: f64 = 0.0;
+
+#[cfg(all(windows, target_arch = "x86_64"))]
+const EMBEDDED_WINDOWS_BRIDGE: &[u8] =
+    include_bytes!("../binaries/yorling-bridge-x86_64-pc-windows-msvc.exe");
 
 #[cfg(target_os = "macos")]
 const COLLAPSED_OUTSIDE_CLICK_THRESHOLD: f64 = FALLBACK_CLOSED_HEIGHT + 4.0;
@@ -657,11 +667,17 @@ fn bridge_binary_candidates() -> Vec<PathBuf> {
             if let Some(contents_dir) = exe_dir.parent() {
                 for binary_name in [bridge_binary_name(), bridge_sidecar_name()] {
                     candidates.push(contents_dir.join("Resources").join(binary_name));
+                    candidates.push(contents_dir.join("resources").join(binary_name));
                     candidates.push(contents_dir.join("Helpers").join(binary_name));
+                    candidates.push(contents_dir.join("helpers").join(binary_name));
                     candidates.push(contents_dir.join("MacOS").join(binary_name));
                 }
             }
         }
+    }
+
+    for binary_name in [bridge_binary_name(), bridge_sidecar_name()] {
+        candidates.push(island_support_dir().join("bin").join(binary_name));
     }
 
     if let Ok(cwd) = std::env::current_dir() {
@@ -683,21 +699,72 @@ fn bridge_binary_candidates() -> Vec<PathBuf> {
 }
 
 fn resolve_bridge_binary_path() -> Result<PathBuf, String> {
-    bridge_binary_candidates()
+    if let Some(candidate) = bridge_binary_candidates()
         .into_iter()
         .find(|candidate| candidate.is_file())
-        .ok_or_else(|| {
-            let searched = bridge_binary_candidates()
-                .into_iter()
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
+    {
+        return Ok(candidate);
+    }
 
+    if let Some(materialized) = materialize_embedded_bridge()? {
+        return Ok(materialized);
+    }
+
+    let searched = bridge_binary_candidates()
+        .into_iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    Err(format!(
+        "Cannot find yorling-bridge binary for target {}. Looked in: {}. Build `cargo build -p yorling-island-bridge` or set YORLING_BRIDGE_PATH.",
+        BRIDGE_TARGET_TRIPLE, searched
+    ))
+}
+
+#[cfg(all(windows, target_arch = "x86_64"))]
+fn materialize_embedded_bridge() -> Result<Option<PathBuf>, String> {
+    let bridge_dir = island_support_dir().join("bin");
+    let bridge_path = bridge_dir.join(bridge_binary_name());
+
+    if let Some(parent) = bridge_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
             format!(
-                "Cannot find yorling-bridge binary for target {}. Looked in: {}. Build `cargo build -p yorling-island-bridge` or set YORLING_BRIDGE_PATH.",
-                BRIDGE_TARGET_TRIPLE, searched
+                "Failed to create embedded bridge directory {}: {}",
+                parent.display(),
+                error
             )
-        })
+        })?;
+    }
+
+    let should_write = match std::fs::read(&bridge_path) {
+        Ok(existing) => existing != EMBEDDED_WINDOWS_BRIDGE,
+        Err(error) if error.kind() == ErrorKind::NotFound => true,
+        Err(error) => {
+            return Err(format!(
+                "Failed to read embedded bridge target {}: {}",
+                bridge_path.display(),
+                error
+            ));
+        }
+    };
+
+    if should_write {
+        std::fs::write(&bridge_path, EMBEDDED_WINDOWS_BRIDGE).map_err(|error| {
+            format!(
+                "Failed to write embedded yorling-bridge to {}: {}",
+                bridge_path.display(),
+                error
+            )
+        })?;
+    }
+
+    Ok(Some(bridge_path))
+}
+
+#[cfg(not(all(windows, target_arch = "x86_64")))]
+fn materialize_embedded_bridge() -> Result<Option<PathBuf>, String> {
+    Ok(None)
 }
 
 // ─── Island window creation ───
@@ -707,10 +774,8 @@ pub fn create_island_window<R: Runtime>(
     initially_enabled: bool,
 ) -> Result<WebviewWindow<R>, tauri::Error> {
     let preferred_screen = detect_main_screen_info();
-    let initial_window_width = preferred_screen
-        .as_ref()
-        .map(|screen| screen.screen_width)
-        .unwrap_or(ISLAND_INITIAL_WINDOW_WIDTH);
+    let (initial_window_width, initial_window_height) =
+        initial_island_window_size(preferred_screen.as_ref());
 
     let window =
         WebviewWindowBuilder::new(app, "island", tauri::WebviewUrl::App("island.html".into()))
@@ -723,7 +788,7 @@ pub fn create_island_window<R: Runtime>(
             .resizable(false)
             .visible(false)
             .accept_first_mouse(true)
-            .inner_size(initial_window_width, ISLAND_WINDOW_HEIGHT)
+            .inner_size(initial_window_width, initial_window_height)
             .build()?;
 
     // Platform-specific window configuration
@@ -733,7 +798,18 @@ pub fn create_island_window<R: Runtime>(
         position_island_window(&window, preferred_screen.as_ref());
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        configure_windows_island(&window);
+        position_windows_island_window(
+            &window,
+            preferred_screen.as_ref(),
+            FALLBACK_CLOSED_WIDTH,
+            FALLBACK_CLOSED_HEIGHT,
+        );
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     position_island_window(&window, preferred_screen.as_ref());
 
     if initially_enabled {
@@ -741,6 +817,42 @@ pub fn create_island_window<R: Runtime>(
     }
 
     Ok(window)
+}
+
+fn initial_island_window_size(preferred_screen: Option<&ScreenInfoDto>) -> (f64, f64) {
+    #[cfg(target_os = "windows")]
+    {
+        let closed_width = preferred_screen
+            .map(|screen| screen.closed_width)
+            .unwrap_or(FALLBACK_CLOSED_WIDTH);
+        let closed_height = preferred_screen
+            .map(|screen| screen.closed_height)
+            .unwrap_or(FALLBACK_CLOSED_HEIGHT);
+        return (closed_width, closed_height);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let initial_window_width = preferred_screen
+            .as_ref()
+            .map(|screen| screen.screen_width)
+            .unwrap_or(ISLAND_INITIAL_WINDOW_WIDTH);
+        (initial_window_width, ISLAND_WINDOW_HEIGHT)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn configure_windows_island<R: Runtime>(window: &WebviewWindow<R>) {
+    if let Err(error) = window.set_shadow(false) {
+        log::warn!("Failed to disable Windows island shadow: {error}");
+    }
+
+    // The Windows island uses a window that tracks the visible island bounds
+    // instead of the macOS full-width pass-through surface. Keep cursor events
+    // enabled so the collapsed pill can be clicked directly.
+    if let Err(error) = window.set_ignore_cursor_events(false) {
+        log::warn!("Failed to enable Windows island cursor events: {error}");
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1163,6 +1275,68 @@ fn position_island_window<R: Runtime>(
     let _ = window.set_position(Position::Logical(LogicalPosition::new(x, y)));
 }
 
+#[cfg(target_os = "windows")]
+fn resize_windows_island_window<R: Runtime>(
+    window: &WebviewWindow<R>,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    let window_width = width.max(FALLBACK_CLOSED_WIDTH).ceil();
+    let window_height = height.max(FALLBACK_CLOSED_HEIGHT).ceil();
+
+    window
+        .set_size(Size::Logical(LogicalSize::new(window_width, window_height)))
+        .map_err(|error| error.to_string())?;
+
+    let preferred_screen = load_island_settings().preferred_screen;
+    let preferred_screen_info = detect_screen_info_for_window(window, preferred_screen.as_deref());
+    position_windows_island_window(
+        window,
+        preferred_screen_info.as_ref(),
+        window_width,
+        window_height,
+    );
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn position_windows_island_window<R: Runtime>(
+    window: &WebviewWindow<R>,
+    preferred_screen: Option<&ScreenInfoDto>,
+    window_width: f64,
+    window_height: f64,
+) {
+    let Some(monitor) = preferred_screen
+        .and_then(|screen| find_matching_monitor(window, screen))
+        .or_else(|| window.current_monitor().ok().flatten())
+        .or_else(|| {
+            window
+                .available_monitors()
+                .ok()
+                .and_then(|monitors| monitors.into_iter().next())
+        })
+    else {
+        return;
+    };
+
+    let scale = monitor.scale_factor();
+    let monitor_position = monitor.position();
+    let monitor_x = monitor_position.x as f64 / scale;
+    let monitor_y = monitor_position.y as f64 / scale;
+    let monitor_width = monitor.size().width as f64 / scale;
+    let x = monitor_x + ((monitor_width - window_width) / 2.0).max(0.0);
+    let y = monitor_y + TOP_BAR_ISLAND_MARGIN;
+
+    let _ = window.set_position(Position::Logical(LogicalPosition::new(x, y)));
+
+    if let Err(error) =
+        window.set_size(Size::Logical(LogicalSize::new(window_width, window_height)))
+    {
+        log::warn!("Failed to apply Windows island window size: {error}");
+    }
+}
+
 fn find_matching_monitor<R: Runtime>(
     window: &WebviewWindow<R>,
     preferred_screen: &ScreenInfoDto,
@@ -1384,6 +1558,12 @@ pub async fn set_island_interaction_bounds(
         rx.await
             .map_err(|_| "Failed to update island interaction bounds".to_string())??;
     }
+
+    #[cfg(target_os = "windows")]
+    {
+        resize_windows_island_window(&window, width, height)?;
+    }
+
     Ok(())
 }
 
@@ -1427,6 +1607,15 @@ pub async fn set_island_mouse_passthrough(
         rx.await
             .map_err(|_| "Failed to update island mouse passthrough".to_string())??;
     }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = passthrough;
+        window
+            .set_ignore_cursor_events(false)
+            .map_err(|error| error.to_string())?;
+    }
+
     Ok(())
 }
 
@@ -1528,9 +1717,17 @@ pub async fn get_island_plugins(
 pub async fn get_island_screen_info<R: Runtime>(
     app: tauri::AppHandle<R>,
 ) -> Result<ScreenInfoDto, String> {
+    #[cfg(not(target_os = "macos"))]
+    let app_for_lookup = app.clone();
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
-        let _ = tx.send(detect_main_screen_info().unwrap_or_else(ScreenInfoDto::fallback));
+        #[cfg(target_os = "macos")]
+        let screen_info = detect_main_screen_info();
+
+        #[cfg(not(target_os = "macos"))]
+        let screen_info = detect_screen_info_for_app(&app_for_lookup, None);
+
+        let _ = tx.send(screen_info.unwrap_or_else(ScreenInfoDto::fallback));
     })
     .map_err(|error| error.to_string())?;
 
@@ -1574,9 +1771,17 @@ pub async fn get_preferred_screen() -> Result<Option<String>, String> {
 pub async fn get_all_screens<R: Runtime>(
     app: tauri::AppHandle<R>,
 ) -> Result<Vec<ScreenInfoDto>, String> {
+    #[cfg(not(target_os = "macos"))]
+    let app_for_lookup = app.clone();
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
-        let _ = tx.send(detect_all_screens());
+        #[cfg(target_os = "macos")]
+        let screens = detect_all_screens();
+
+        #[cfg(not(target_os = "macos"))]
+        let screens = detect_all_screens_for_app(&app_for_lookup);
+
+        let _ = tx.send(screens);
     })
     .map_err(|error| error.to_string())?;
 
@@ -1597,9 +1802,18 @@ pub async fn set_preferred_screen<R: Runtime>(
 
     // Re-position the island window on the new screen
     if let Some(window) = app.get_webview_window("island") {
+        #[cfg(not(target_os = "macos"))]
+        let preferred_name = settings.preferred_screen.clone();
+        #[cfg(not(target_os = "macos"))]
+        let app_for_lookup = app.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
         app.run_on_main_thread(move || {
+            #[cfg(target_os = "macos")]
             let screen = detect_main_screen_info();
+
+            #[cfg(not(target_os = "macos"))]
+            let screen = detect_screen_info_for_app(&app_for_lookup, preferred_name.as_deref());
+
             let _ = tx.send(screen);
         })
         .map_err(|e| e.to_string())?;
@@ -1608,6 +1822,22 @@ pub async fn set_preferred_screen<R: Runtime>(
             .await
             .map_err(|_| "Failed to get screen info".to_string())?;
 
+        #[cfg(target_os = "windows")]
+        {
+            let size = window.inner_size().ok();
+            let scale = window.scale_factor().unwrap_or(1.0);
+            let width = size
+                .as_ref()
+                .map(|size| size.width as f64 / scale)
+                .unwrap_or(FALLBACK_CLOSED_WIDTH);
+            let height = size
+                .as_ref()
+                .map(|size| size.height as f64 / scale)
+                .unwrap_or(FALLBACK_CLOSED_HEIGHT);
+            position_windows_island_window(&window, screen_info.as_ref(), width, height);
+        }
+
+        #[cfg(not(target_os = "windows"))]
         position_island_window(&window, screen_info.as_ref());
 
         // Emit updated screen info to frontend
@@ -2702,13 +2932,101 @@ fn detect_all_screens() -> Vec<ScreenInfoDto> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn detect_all_screens() -> Vec<ScreenInfoDto> {
-    Vec::new()
+fn detect_main_screen_info() -> Option<ScreenInfoDto> {
+    None
 }
 
 #[cfg(not(target_os = "macos"))]
-fn detect_main_screen_info() -> Option<ScreenInfoDto> {
-    None
+fn detect_screen_info_for_app<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    preferred_name: Option<&str>,
+) -> Option<ScreenInfoDto> {
+    let window = app
+        .get_webview_window("island")
+        .or_else(|| app.get_webview_window("main"))?;
+    detect_screen_info_for_window(&window, preferred_name)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn detect_all_screens_for_app<R: Runtime>(app: &tauri::AppHandle<R>) -> Vec<ScreenInfoDto> {
+    let Some(window) = app
+        .get_webview_window("island")
+        .or_else(|| app.get_webview_window("main"))
+    else {
+        return Vec::new();
+    };
+
+    window
+        .available_monitors()
+        .map(|monitors| {
+            monitors
+                .iter()
+                .map(screen_info_from_monitor)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn detect_screen_info_for_window<R: Runtime>(
+    window: &WebviewWindow<R>,
+    preferred_name: Option<&str>,
+) -> Option<ScreenInfoDto> {
+    if let Some(preferred_name) = preferred_name {
+        if let Ok(monitors) = window.available_monitors() {
+            if let Some(monitor) = monitors.iter().find(|monitor| {
+                monitor
+                    .name()
+                    .as_deref()
+                    .is_some_and(|name| name == preferred_name)
+            }) {
+                return Some(screen_info_from_monitor(monitor));
+            }
+        }
+    }
+
+    window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .as_ref()
+        .map(screen_info_from_monitor)
+        .or_else(|| {
+            window
+                .available_monitors()
+                .ok()
+                .and_then(|monitors| monitors.into_iter().next())
+                .as_ref()
+                .map(screen_info_from_monitor)
+        })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn screen_info_from_monitor(monitor: &Monitor) -> ScreenInfoDto {
+    let scale_factor = monitor.scale_factor();
+    let screen_width = monitor.size().width as f64 / scale_factor;
+    let screen_height = monitor.size().height as f64 / scale_factor;
+    let screen_name = monitor.name().cloned().unwrap_or_else(|| {
+        format!(
+            "Display {}x{}",
+            screen_width.round() as u32,
+            screen_height.round() as u32
+        )
+    });
+
+    ScreenInfoDto {
+        screen_name,
+        has_notch: false,
+        screen_width,
+        screen_height,
+        notch_rect: None,
+        scale_factor,
+        is_builtin: false,
+        placement_mode: "top_bar".to_string(),
+        top_inset: TOP_BAR_ISLAND_MARGIN,
+        closed_width: FALLBACK_CLOSED_WIDTH,
+        closed_height: FALLBACK_CLOSED_HEIGHT,
+    }
 }
 
 #[cfg(target_os = "macos")]

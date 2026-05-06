@@ -48,17 +48,33 @@ impl CopilotProvider {
         )
     }
 
+    fn hook_command_field() -> &'static str {
+        #[cfg(windows)]
+        {
+            "windows"
+        }
+
+        #[cfg(not(windows))]
+        {
+            "bash"
+        }
+    }
+
     fn managed_hooks_json(bridge_path: &Path, transport_endpoint: &Path) -> Value {
         let hook_cmd = Self::build_hook_command(bridge_path, transport_endpoint);
         let hooks = HOOK_EVENTS
             .iter()
             .map(|event_name| {
+                let mut command_hook = serde_json::Map::new();
+                command_hook.insert("type".into(), Value::String("command".into()));
+                command_hook.insert(
+                    Self::hook_command_field().into(),
+                    Value::String(format!("{hook_cmd} --event {event_name}")),
+                );
+
                 (
                     (*event_name).to_string(),
-                    Value::Array(vec![serde_json::json!({
-                        "type": "command",
-                        "bash": format!("{hook_cmd} --event {event_name}"),
-                    })]),
+                    Value::Array(vec![Value::Object(command_hook)]),
                 )
             })
             .collect::<serde_json::Map<String, Value>>();
