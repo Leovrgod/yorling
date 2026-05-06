@@ -72,3 +72,33 @@ test('bypasses native Windows Alt+Tab before keyboard mapping state can stick', 
     /physical_keys\.remove\(&\(VirtualKeyCode::Option as u16\)\);[\s\S]*physical_keys\.remove\(&\(VirtualKeyCode::Tab as u16\)\);/,
   );
 });
+
+test('does not query async keyboard state from inside the Windows keyboard hook', () => {
+  const windowsKeyboardSource = readFileSync('src-tauri/src/windows_keyboard.rs', 'utf8');
+  const keyboardHookMatch = windowsKeyboardSource.match(
+    /unsafe extern "system" fn low_level_keyboard_proc[\s\S]*?\n}\n\nfn is_native_alt_tab_event/,
+  );
+
+  assert.ok(keyboardHookMatch);
+  assert.strictEqual(windowsKeyboardSource.includes('GetAsyncKeyState'), false);
+  assert.strictEqual(
+    keyboardHookMatch?.[0].includes('update_physical_key_state(&context, keycode, key_down)'),
+    true,
+  );
+  assert.strictEqual(keyboardHookMatch?.[0].includes('reset_engine_after_physical_desync'), false);
+});
+
+test('clears synthetic restored modifiers before Windows mouse clicks', () => {
+  const windowsKeyboardSource = readFileSync('src-tauri/src/windows_keyboard.rs', 'utf8');
+
+  assert.strictEqual(windowsKeyboardSource.includes('synthetic_restored_modifiers'), true);
+  assert.strictEqual(windowsKeyboardSource.includes('fn release_synthetic_restored_modifiers'), true);
+  assert.match(
+    windowsKeyboardSource,
+    /WM_LBUTTONDOWN \| WM_RBUTTONDOWN \| WM_MBUTTONDOWN \| WM_XBUTTONDOWN[\s\S]*release_synthetic_restored_modifiers\(&context\);[\s\S]*cancel_transient_modes_for_mouse_down\(&context\);/s,
+  );
+  assert.match(
+    windowsKeyboardSource,
+    /record_synthetic_modifier_restores\(context, physical_flags & !desired_flags\);[\s\S]*emit_synthetic_key\(key\.keycode, key\.key_down, desired_flags, physical_flags\);/s,
+  );
+});

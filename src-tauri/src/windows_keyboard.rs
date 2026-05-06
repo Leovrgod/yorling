@@ -5,8 +5,9 @@ use std::ffi::c_void;
 use std::mem;
 use std::ptr;
 use std::sync::{
+    Arc, Mutex, OnceLock,
     atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering},
-    mpsc, Arc, Mutex, OnceLock,
+    mpsc,
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -15,23 +16,23 @@ use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP,
-    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
-    MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT, VK_0,
-    VK_1, VK_2, VK_3, VK_4, VK_5, VK_6, VK_7, VK_8, VK_9, VK_A, VK_B, VK_BACK, VK_C, VK_CONTROL,
-    VK_D, VK_DOWN, VK_E, VK_END, VK_ESCAPE, VK_F, VK_G, VK_H, VK_HOME, VK_I, VK_J, VK_K, VK_L,
-    VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_M, VK_MENU, VK_N, VK_O, VK_OEM_1,
-    VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD,
-    VK_OEM_PLUS, VK_P, VK_Q, VK_R, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN,
-    VK_S, VK_SHIFT, VK_SPACE, VK_T, VK_TAB, VK_U, VK_UP, VK_V, VK_W, VK_X, VK_Y, VK_Z,
+    INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, MOUSEEVENTF_LEFTDOWN,
+    MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
+    MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT, SendInput, VK_0, VK_1, VK_2,
+    VK_3, VK_4, VK_5, VK_6, VK_7, VK_8, VK_9, VK_A, VK_B, VK_BACK, VK_C, VK_CONTROL, VK_D, VK_DOWN,
+    VK_E, VK_END, VK_ESCAPE, VK_F, VK_G, VK_H, VK_HOME, VK_I, VK_J, VK_K, VK_L, VK_LCONTROL,
+    VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_M, VK_MENU, VK_N, VK_O, VK_OEM_1, VK_OEM_2, VK_OEM_3,
+    VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_P,
+    VK_Q, VK_R, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_S, VK_SHIFT,
+    VK_SPACE, VK_T, VK_TAB, VK_U, VK_UP, VK_V, VK_W, VK_X, VK_Y, VK_Z,
 };
 use windows_sys::Win32::UI::Shell::IsUserAnAdmin;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetMessageW, PeekMessageW, PostThreadMessageW,
-    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT,
-    LLKHF_ALTDOWN, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN,
-    WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP,
-    WM_USER, WM_XBUTTONDOWN, XBUTTON1,
+    CallNextHookEx, DispatchMessageW, GetMessageW, HC_ACTION, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, MSG,
+    MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostThreadMessageW, SetWindowsHookExW,
+    TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP,
+    WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER,
+    WM_XBUTTONDOWN, XBUTTON1,
 };
 use yorling_core::keycode::{self, VirtualKeyCode};
 use yorling_engine::engine::{
@@ -156,6 +157,7 @@ struct HookContext {
     enabled: AtomicBool,
     event_count: AtomicU64,
     physical_keys: Mutex<HashSet<u16>>,
+    synthetic_restored_modifiers: Mutex<HashSet<u16>>,
     system_action_handler: Mutex<Option<Arc<dyn Fn(SystemAction) + Send + Sync>>>,
     mouse_motion: MouseMotionController,
 }
@@ -167,6 +169,7 @@ impl HookContext {
             enabled: AtomicBool::new(false),
             event_count: AtomicU64::new(0),
             physical_keys: Mutex::new(HashSet::new()),
+            synthetic_restored_modifiers: Mutex::new(HashSet::new()),
             system_action_handler: Mutex::new(None),
             mouse_motion: MouseMotionController::new(),
         }
@@ -209,6 +212,11 @@ impl WindowsKeyboardInterceptor {
             engine.set_enabled(initially_enabled);
         }
         self.context.physical_keys.lock().unwrap().clear();
+        self.context
+            .synthetic_restored_modifiers
+            .lock()
+            .unwrap()
+            .clear();
         self.context.event_count.store(0, Ordering::SeqCst);
         self.context
             .enabled
@@ -304,6 +312,7 @@ impl WindowsKeyboardInterceptor {
     pub fn stop(&self) {
         self.context.enabled.store(false, Ordering::SeqCst);
         self.context.mouse_motion.stop_motion();
+        release_synthetic_restored_modifiers(&self.context);
 
         if let Ok(mut engine) = self.context.engine.lock() {
             let flags = current_physical_flags(&self.context);
@@ -311,6 +320,7 @@ impl WindowsKeyboardInterceptor {
                 emit_synthetic_key(key.keycode, key.key_down, key.extra_flags, flags);
             }
         }
+        self.context.physical_keys.lock().unwrap().clear();
 
         let thread_id = self.hook_thread_id.load(Ordering::SeqCst);
         if thread_id != 0 {
@@ -330,6 +340,9 @@ impl WindowsKeyboardInterceptor {
 
     pub fn set_enabled(&self, enabled: bool) {
         self.context.enabled.store(enabled, Ordering::SeqCst);
+        if !enabled {
+            release_synthetic_restored_modifiers(&self.context);
+        }
 
         if let Ok(mut engine) = self.context.engine.lock() {
             let flags = current_physical_flags(&self.context);
@@ -340,6 +353,7 @@ impl WindowsKeyboardInterceptor {
 
         if !enabled {
             self.context.mouse_motion.stop_motion();
+            self.context.physical_keys.lock().unwrap().clear();
         }
     }
 
@@ -406,6 +420,7 @@ unsafe extern "system" fn low_level_mouse_proc(
         WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
     ) {
         if let Some(context) = current_hook_context() {
+            release_synthetic_restored_modifiers(&context);
             cancel_transient_modes_for_mouse_down(&context);
         }
     }
@@ -545,12 +560,23 @@ fn update_physical_key_state(context: &HookContext, keycode: u16, key_down: bool
 
     if key_down {
         physical_keys.insert(keycode);
+        remove_restored_modifier(&context.synthetic_restored_modifiers, keycode);
     } else {
         physical_keys.remove(&keycode);
+        remove_restored_modifier(&context.synthetic_restored_modifiers, keycode);
     }
 
     let flags = modifier_flags_from_keys(&physical_keys);
     (key_down && was_down, flags)
+}
+
+fn remove_restored_modifier(restored_modifiers: &Mutex<HashSet<u16>>, keycode: u16) {
+    if !is_modifier_keycode(keycode) {
+        return;
+    }
+
+    let mut restored_modifiers = restored_modifiers.lock().unwrap();
+    restored_modifiers.remove(&canonical_modifier_keycode(keycode));
 }
 
 fn current_physical_flags(context: &HookContext) -> u64 {
@@ -581,6 +607,109 @@ fn modifier_flags_from_keys(keys: &HashSet<u16>) -> u64 {
     flags
 }
 
+fn is_modifier_keycode(keycode: u16) -> bool {
+    matches!(
+        VirtualKeyCode::from_raw(keycode),
+        Some(
+            VirtualKeyCode::Shift
+                | VirtualKeyCode::RightShift
+                | VirtualKeyCode::Control
+                | VirtualKeyCode::RightControl
+                | VirtualKeyCode::Option
+                | VirtualKeyCode::RightOption
+                | VirtualKeyCode::Command
+                | VirtualKeyCode::RightCommand
+        )
+    )
+}
+
+fn canonical_modifier_keycode(keycode: u16) -> u16 {
+    match VirtualKeyCode::from_raw(keycode) {
+        Some(VirtualKeyCode::RightShift) => VirtualKeyCode::Shift as u16,
+        Some(VirtualKeyCode::RightControl) => VirtualKeyCode::Control as u16,
+        Some(VirtualKeyCode::RightOption) => VirtualKeyCode::Option as u16,
+        Some(VirtualKeyCode::RightCommand) => VirtualKeyCode::Command as u16,
+        _ => keycode,
+    }
+}
+
+fn modifier_keycodes_for_flags(flags: u64) -> impl Iterator<Item = u16> {
+    [
+        (keycode::FLAG_COMMAND, VirtualKeyCode::Command as u16),
+        (keycode::FLAG_CONTROL, VirtualKeyCode::Control as u16),
+        (keycode::FLAG_SHIFT, VirtualKeyCode::Shift as u16),
+        (keycode::FLAG_OPTION, VirtualKeyCode::Option as u16),
+    ]
+    .into_iter()
+    .filter_map(move |(flag, keycode)| {
+        if flags & flag != 0 {
+            Some(keycode)
+        } else {
+            None
+        }
+    })
+}
+
+fn remove_modifier_family(keys: &mut HashSet<u16>, keycode: u16) {
+    match VirtualKeyCode::from_raw(canonical_modifier_keycode(keycode)) {
+        Some(VirtualKeyCode::Shift) => {
+            keys.remove(&(VirtualKeyCode::Shift as u16));
+            keys.remove(&(VirtualKeyCode::RightShift as u16));
+        }
+        Some(VirtualKeyCode::Control) => {
+            keys.remove(&(VirtualKeyCode::Control as u16));
+            keys.remove(&(VirtualKeyCode::RightControl as u16));
+        }
+        Some(VirtualKeyCode::Option) => {
+            keys.remove(&(VirtualKeyCode::Option as u16));
+            keys.remove(&(VirtualKeyCode::RightOption as u16));
+        }
+        Some(VirtualKeyCode::Command) => {
+            keys.remove(&(VirtualKeyCode::Command as u16));
+            keys.remove(&(VirtualKeyCode::RightCommand as u16));
+        }
+        _ => {
+            keys.remove(&keycode);
+        }
+    }
+}
+
+fn record_synthetic_modifier_restores(context: &HookContext, restored_flags: u64) {
+    if restored_flags == 0 {
+        return;
+    }
+
+    let mut restored_modifiers = context.synthetic_restored_modifiers.lock().unwrap();
+    for keycode in modifier_keycodes_for_flags(restored_flags) {
+        restored_modifiers.insert(keycode);
+    }
+}
+
+fn release_synthetic_restored_modifiers(context: &HookContext) {
+    let restored_modifiers: Vec<u16> = context
+        .synthetic_restored_modifiers
+        .lock()
+        .unwrap()
+        .drain()
+        .collect();
+
+    if restored_modifiers.is_empty() {
+        return;
+    }
+
+    {
+        let mut physical_keys = context.physical_keys.lock().unwrap();
+        for keycode in &restored_modifiers {
+            remove_modifier_family(&mut physical_keys, *keycode);
+        }
+    }
+
+    context.mouse_motion.stop_motion();
+    for keycode in restored_modifiers {
+        emit_synthetic_key(keycode, false, 0, 0);
+    }
+}
+
 fn dispatch_engine_action(
     context: &HookContext,
     action: EngineAction,
@@ -596,6 +725,7 @@ fn dispatch_engine_action(
                 } else {
                     key.extra_flags
                 };
+                record_synthetic_modifier_restores(context, physical_flags & !desired_flags);
                 emit_synthetic_key(key.keycode, key.key_down, desired_flags, physical_flags);
             }
             true
@@ -607,6 +737,7 @@ fn dispatch_engine_action(
                 } else {
                     key.extra_flags
                 };
+                record_synthetic_modifier_restores(context, physical_flags & !desired_flags);
                 emit_synthetic_key(key.keycode, key.key_down, desired_flags, physical_flags);
             }
             dispatch_system_action(context, system_action);
