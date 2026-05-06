@@ -16,8 +16,12 @@ test('wires Windows tray icon to keyboard mapping controls', () => {
   assert.strictEqual(traySource.includes('toggle_windows_keyboard_mapping'), true);
   assert.strictEqual(traySource.includes('tray.set_icon(Some(tray_image(active)?))'), true);
   assert.strictEqual(traySource.includes('dim_icon(icon)'), true);
+  assert.strictEqual(traySource.includes('OPEN_WINDOW_MENU_ID'), true);
+  assert.strictEqual(traySource.includes('打开 Yorling'), true);
+  assert.strictEqual(traySource.includes('present_main_window(app, crate::MainWindowLifecycle::Ready)'), true);
   assert.strictEqual(traySource.includes('QUIT_MENU_ID'), true);
   assert.strictEqual(traySource.includes('app.exit(0)'), true);
+  assert.strictEqual(libSource.includes('window.label() == MAIN_WINDOW_LABEL'), true);
 
   assert.strictEqual(keyboardCommandSource.includes('windows_keyboard_mapping_active'), true);
   assert.strictEqual(keyboardCommandSource.includes('crate::windows_tray::refresh(&app'), true);

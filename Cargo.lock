@@ -5946,6 +5946,7 @@ dependencies = [
  "tokio",
  "url",
  "windows-sys 0.61.2",
+ "winreg 0.10.1",
  "yorling-core",
  "yorling-engine",
  "yorling-island-core",

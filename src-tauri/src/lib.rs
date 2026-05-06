@@ -7,6 +7,7 @@ mod windows_keyboard;
 #[cfg(target_os = "windows")]
 mod windows_tray;
 
+use commands::autostart::launched_from_windows_autostart;
 use commands::clipboard::ClipboardState;
 use commands::keyboard::InterceptorState;
 use commands::super_right_click::SuperRightClickState;
@@ -59,7 +60,7 @@ const fn main_window_presentation_plan(
     }
 }
 
-fn present_main_window<R: Runtime>(
+pub(crate) fn present_main_window<R: Runtime>(
     app_handle: &tauri::AppHandle<R>,
     lifecycle: MainWindowLifecycle,
 ) {
@@ -288,6 +289,8 @@ pub fn run() {
             commands::keyboard::activate_alt_tab_window,
             commands::keyboard::get_alt_tab_thumbnail,
             commands::keyboard::get_alt_tab_app_icon,
+            commands::autostart::is_windows_autostart_enabled,
+            commands::autostart::set_windows_autostart_enabled,
             commands::super_right_click::get_super_right_click_status,
             commands::super_right_click::start_super_right_click,
             commands::super_right_click::stop_super_right_click,
@@ -337,12 +340,14 @@ pub fn run() {
             // Prevent app from fully quitting when window is closed —
             // it should keep running in the background
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
                 {
-                    if let Err(error) = window.hide() {
-                        log::warn!("Failed to hide the main window on close request: {error}");
+                    if window.label() == MAIN_WINDOW_LABEL {
+                        if let Err(error) = window.hide() {
+                            log::warn!("Failed to hide the main window on close request: {error}");
+                        }
+                        api.prevent_close();
                     }
-                    api.prevent_close();
                 }
             }
         })
@@ -353,6 +358,8 @@ pub fn run() {
         tauri::RunEvent::Ready => {
             if suppress_ready_presentation_for_run.swap(false, Ordering::SeqCst) {
                 log::info!("Suppressing main window presentation for Finder action launch");
+            } else if launched_from_windows_autostart() {
+                log::info!("Suppressing main window presentation for Windows autostart launch");
             } else {
                 present_main_window(app_handle, MainWindowLifecycle::Ready);
             }

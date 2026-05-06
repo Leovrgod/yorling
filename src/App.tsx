@@ -210,7 +210,35 @@ function UpdateControl({ language }: { language: AppLanguageId }) {
   );
 }
 
-function StartupToggle({ language }: { language: AppLanguageId }) {
+async function readStartupEnabled(platform: YorlingPlatform): Promise<boolean> {
+  if (platform === 'windows') {
+    return invoke<boolean>('is_windows_autostart_enabled');
+  }
+
+  return isAutostartEnabled();
+}
+
+async function setStartupEnabled(platform: YorlingPlatform, enabled: boolean): Promise<boolean> {
+  if (platform === 'windows') {
+    return invoke<boolean>('set_windows_autostart_enabled', { enabled });
+  }
+
+  if (enabled) {
+    await enableAutostart();
+  } else {
+    await disableAutostart();
+  }
+
+  return isAutostartEnabled();
+}
+
+function StartupToggle({
+  language,
+  platform,
+}: {
+  language: AppLanguageId;
+  platform: YorlingPlatform;
+}) {
   const copy = getUiCopy(language);
   const [enabled, setEnabled] = useState(false);
   const [available, setAvailable] = useState(true);
@@ -221,7 +249,7 @@ function StartupToggle({ language }: { language: AppLanguageId }) {
 
     void (async () => {
       try {
-        const autostartEnabled = await isAutostartEnabled();
+        const autostartEnabled = await readStartupEnabled(platform);
         if (mounted) {
           setEnabled(autostartEnabled);
           setAvailable(true);
@@ -241,7 +269,7 @@ function StartupToggle({ language }: { language: AppLanguageId }) {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [platform]);
 
   const handleChange = async (nextEnabled: boolean) => {
     if (pending || !available) return;
@@ -251,13 +279,7 @@ function StartupToggle({ language }: { language: AppLanguageId }) {
     setPending(true);
 
     try {
-      if (nextEnabled) {
-        await enableAutostart();
-      } else {
-        await disableAutostart();
-      }
-
-      setEnabled(await isAutostartEnabled());
+      setEnabled(await setStartupEnabled(platform, nextEnabled));
     } catch (error) {
       console.error('Failed to update autostart status.', error);
       setEnabled(previousEnabled);
@@ -592,7 +614,7 @@ function MainApp() {
           utilityControls={(
             <>
               <UpdateControl language={language} />
-              <StartupToggle language={language} />
+              <StartupToggle language={language} platform={platform} />
               <LanguageSwitcher language={language} setLanguage={setLanguage} />
               <ThemeSwitcher theme={theme} setTheme={setTheme} language={language} />
             </>

@@ -8,12 +8,15 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, Tray
 use tauri::{AppHandle, Emitter};
 
 const TRAY_ID: &str = "yorling-keyboard-tray";
+const OPEN_WINDOW_MENU_ID: &str = "yorling-tray-open-window";
 const QUIT_MENU_ID: &str = "yorling-tray-quit";
 const TRAY_EVENT: &str = "keyboard-tray-status-changed";
 
 pub fn setup(app: &AppHandle, interceptor_state: Arc<InterceptorState>) -> tauri::Result<()> {
+    let open_window_item =
+        MenuItem::with_id(app, OPEN_WINDOW_MENU_ID, "打开 Yorling", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, QUIT_MENU_ID, "退出 Yorling", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&quit_item])?;
+    let menu = Menu::with_items(app, &[&open_window_item, &quit_item])?;
     let initial_active = interceptor_state.windows_keyboard_mapping_active();
 
     let state_for_click = Arc::clone(&interceptor_state);
@@ -46,7 +49,9 @@ pub fn setup(app: &AppHandle, interceptor_state: Arc<InterceptorState>) -> tauri
             }
         })
         .on_menu_event(move |app, event| {
-            if event.id() == QUIT_MENU_ID {
+            if event.id() == OPEN_WINDOW_MENU_ID {
+                crate::present_main_window(app, crate::MainWindowLifecycle::Ready);
+            } else if event.id() == QUIT_MENU_ID {
                 state_for_menu.shutdown_windows_keyboard_mapping();
                 app.exit(0);
             }
