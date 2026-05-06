@@ -80,3 +80,22 @@ test('implements clipboard history with native pasteboard polling and a note wal
   assert.strictEqual(styleSource.includes('.clipboard-note__tape'), true);
   assert.strictEqual(styleSource.includes('.clipboard-note--tone-5'), true);
 });
+
+test('keeps clipboard history native on Windows for text, files, and screenshots', () => {
+  const commandSource = readFileSync('src-tauri/src/commands/clipboard.rs', 'utf8');
+  const cargoSource = readFileSync('src-tauri/Cargo.toml', 'utf8');
+
+  assert.strictEqual(commandSource.includes('#[cfg(target_os = "windows")]'), true);
+  assert.strictEqual(commandSource.includes('GetClipboardSequenceNumber'), true);
+  assert.strictEqual(commandSource.includes('CF_UNICODETEXT'), true);
+  assert.strictEqual(commandSource.includes('CF_HDROP'), true);
+  assert.strictEqual(commandSource.includes('DragQueryFileW'), true);
+  assert.strictEqual(commandSource.includes('CF_DIB'), true);
+  assert.strictEqual(commandSource.includes('RegisterClipboardFormatW'), true);
+  assert.strictEqual(commandSource.includes('PNG_CLIPBOARD_FORMAT'), true);
+  assert.strictEqual(commandSource.includes('write_file_list_to_clipboard'), true);
+  assert.strictEqual(commandSource.includes('explorer'), true);
+  assert.strictEqual(cargoSource.includes('"Win32_System_DataExchange"'), true);
+  assert.strictEqual(cargoSource.includes('"Win32_System_Memory"'), true);
+  assert.strictEqual(cargoSource.includes('"Win32_System_Ole"'), true);
+});

@@ -163,7 +163,7 @@ test('surfaces screen recording permission guidance in the top-right controls', 
   assert.strictEqual(libSource.includes('commands::keyboard::open_screen_recording_settings'), true);
 });
 
-test('limits the Windows shell to the keyboard module and hides macOS permission controls when not required', () => {
+test('limits the Windows shell to supported modules and hides macOS permission controls when not required', () => {
   const appSource = readFileSync('src/App.tsx', 'utf8');
   const sidebarSource = readFileSync('src/components/common/Sidebar.tsx', 'utf8');
   const platformSource = readFileSync('src/utils/platform.ts', 'utf8');
@@ -171,7 +171,7 @@ test('limits the Windows shell to the keyboard module and hides macOS permission
   const commandSource = readFileSync('src-tauri/src/commands/keyboard.rs', 'utf8');
 
   assert.strictEqual(platformSource.includes("if (platform === 'windows')"), true);
-  assert.strictEqual(platformSource.includes("return ['keyboard'];"), true);
+  assert.strictEqual(platformSource.includes("return ['keyboard', 'music', 'clipboard'];"), true);
   assert.strictEqual(appSource.includes('getEnabledModulesForPlatform(platform)'), true);
   assert.strictEqual(appSource.includes('isModuleEnabledOnPlatform(activeModule, platform)'), true);
   assert.strictEqual(appSource.includes('useEmbeddedTerminalEvents(shouldEnableMacOnlyBackgroundModules)'), true);
