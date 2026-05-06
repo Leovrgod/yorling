@@ -94,8 +94,28 @@ test('keeps clipboard history native on Windows for text, files, and screenshots
   assert.strictEqual(commandSource.includes('RegisterClipboardFormatW'), true);
   assert.strictEqual(commandSource.includes('PNG_CLIPBOARD_FORMAT'), true);
   assert.strictEqual(commandSource.includes('write_file_list_to_clipboard'), true);
+  assert.strictEqual(commandSource.includes('dib_clipboard_bytes_from_image'), true);
+  assert.strictEqual(commandSource.includes('decoded_image_to_dib_bytes'), true);
+  assert.strictEqual(commandSource.includes('write_raw_image_format_to_clipboard'), true);
+  assert.strictEqual(commandSource.includes('image::load_from_memory'), true);
+  assert.strictEqual(cargoSource.includes('image = { version = "0.25.10"'), true);
   assert.strictEqual(commandSource.includes('explorer'), true);
   assert.strictEqual(cargoSource.includes('"Win32_System_DataExchange"'), true);
   assert.strictEqual(cargoSource.includes('"Win32_System_Memory"'), true);
   assert.strictEqual(cargoSource.includes('"Win32_System_Ole"'), true);
+});
+
+test('writes Windows image files back as both file references and image content', () => {
+  const commandSource = readFileSync('src-tauri/src/commands/clipboard.rs', 'utf8');
+  const writeItemsStart = commandSource.indexOf('fn write_items_to_clipboard');
+  const writeFiles = commandSource.indexOf('write_file_list_to_clipboard(&file_paths)', writeItemsStart);
+  const writeImage = commandSource.indexOf('write_image_to_clipboard(image)', writeItemsStart);
+
+  assert.ok(writeItemsStart > 0);
+  assert.ok(writeFiles > writeItemsStart);
+  assert.ok(writeImage > writeFiles);
+  assert.strictEqual(
+    commandSource.includes('return write_file_list_to_clipboard(&file_paths);'),
+    false,
+  );
 });

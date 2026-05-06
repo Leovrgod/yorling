@@ -1923,16 +1923,31 @@ mod platform {
             .iter()
             .filter_map(|item| item.file_path.as_deref())
             .collect::<Vec<_>>();
+        let image = items.iter().find_map(|item| item.image.as_ref());
+        let mut wrote_any = false;
+        let mut errors = Vec::new();
 
         if !file_paths.is_empty() {
-            return write_file_list_to_clipboard(&file_paths);
+            match write_file_list_to_clipboard(&file_paths) {
+                Ok(()) => wrote_any = true,
+                Err(error) => errors.push(error),
+            }
         }
 
-        let Some(image) = items.iter().find_map(|item| item.image.as_ref()) else {
-            return Err("Clipboard item has no writable Windows payload".into());
-        };
+        if let Some(image) = image {
+            match write_image_to_clipboard(image) {
+                Ok(()) => wrote_any = true,
+                Err(error) => errors.push(error),
+            }
+        }
 
-        write_image_to_clipboard(image)
+        if wrote_any {
+            Ok(())
+        } else if errors.is_empty() {
+            Err("Clipboard item has no writable Windows payload".into())
+        } else {
+            Err(errors.join("; "))
+        }
     }
 
     fn write_file_list_to_clipboard(paths: &[&str]) -> Result<(), String> {
@@ -1981,26 +1996,50 @@ mod platform {
     }
 
     fn write_image_to_clipboard(image: &ClipboardImagePayload) -> Result<(), String> {
-        match image.pasteboard_type {
-            ImagePasteboardType::Bmp => {
-                let dib = dib_bytes_from_bmp_or_dib(&image.bytes);
-                write_clipboard_bytes(u32::from(CF_DIB), dib)
-            }
-            ImagePasteboardType::Png => {
-                let format = register_clipboard_format(PNG_CLIPBOARD_FORMAT);
-                if format == 0 {
-                    return Err("Windows did not register the PNG clipboard format".into());
-                }
-                write_clipboard_bytes(format, &image.bytes)
-            }
-            other => {
-                let format = register_clipboard_format(image_type_label(other));
-                if format == 0 {
-                    return Err("Windows did not register the image clipboard format".into());
-                }
-                write_clipboard_bytes(format, &image.bytes)
+        let mut wrote_any = false;
+        let mut errors = Vec::new();
+
+        match dib_clipboard_bytes_from_image(image) {
+            Some(dib) => match write_clipboard_bytes(u32::from(CF_DIB), &dib) {
+                Ok(()) => wrote_any = true,
+                Err(error) => errors.push(error),
+            },
+            None => errors.push(format!(
+                "{} image data could not be converted to a Windows bitmap clipboard format",
+                image_type_label(image.pasteboard_type)
+            )),
+        }
+
+        if should_publish_raw_image_format(image.pasteboard_type) {
+            match write_raw_image_format_to_clipboard(image) {
+                Ok(()) => wrote_any = true,
+                Err(error) => errors.push(error),
             }
         }
+
+        if wrote_any {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
+    }
+
+    fn write_raw_image_format_to_clipboard(image: &ClipboardImagePayload) -> Result<(), String> {
+        let format_name = match image.pasteboard_type {
+            ImagePasteboardType::Png => PNG_CLIPBOARD_FORMAT,
+            other => image_type_label(other),
+        };
+        let format = register_clipboard_format(format_name);
+        if format == 0 {
+            return Err(format!(
+                "Windows did not register the {format_name} clipboard format"
+            ));
+        }
+        write_clipboard_bytes(format, &image.bytes)
+    }
+
+    fn should_publish_raw_image_format(pasteboard_type: ImagePasteboardType) -> bool {
+        !matches!(pasteboard_type, ImagePasteboardType::Bmp)
     }
 
     fn write_clipboard_bytes(format: u32, bytes: &[u8]) -> Result<(), String> {
@@ -2128,6 +2167,53 @@ mod platform {
         } else {
             bytes
         }
+    }
+
+    fn dib_clipboard_bytes_from_image(image: &ClipboardImagePayload) -> Option<Vec<u8>> {
+        match image.pasteboard_type {
+            ImagePasteboardType::Bmp => Some(dib_bytes_from_bmp_or_dib(&image.bytes).to_vec()),
+            ImagePasteboardType::Heic | ImagePasteboardType::Heif | ImagePasteboardType::Svg => {
+                None
+            }
+            ImagePasteboardType::Png
+            | ImagePasteboardType::Tiff
+            | ImagePasteboardType::Jpeg
+            | ImagePasteboardType::Gif
+            | ImagePasteboardType::Webp => decoded_image_to_dib_bytes(&image.bytes),
+        }
+    }
+
+    fn decoded_image_to_dib_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
+        let image = image::load_from_memory(bytes).ok()?.to_rgba8();
+        let width = image.width();
+        let height = image.height();
+        let width_i32 = i32::try_from(width).ok()?;
+        let top_down_height = i32::try_from(height).ok()?.checked_neg()?;
+        let pixel_byte_count = usize::try_from(width)
+            .ok()?
+            .checked_mul(usize::try_from(height).ok()?)?
+            .checked_mul(4)?;
+        let pixel_byte_count_u32 = u32::try_from(pixel_byte_count).ok()?;
+
+        let mut dib = Vec::with_capacity(40usize.checked_add(pixel_byte_count)?);
+        dib.extend_from_slice(&40u32.to_le_bytes());
+        dib.extend_from_slice(&width_i32.to_le_bytes());
+        dib.extend_from_slice(&top_down_height.to_le_bytes());
+        dib.extend_from_slice(&1u16.to_le_bytes());
+        dib.extend_from_slice(&32u16.to_le_bytes());
+        dib.extend_from_slice(&0u32.to_le_bytes());
+        dib.extend_from_slice(&pixel_byte_count_u32.to_le_bytes());
+        dib.extend_from_slice(&0i32.to_le_bytes());
+        dib.extend_from_slice(&0i32.to_le_bytes());
+        dib.extend_from_slice(&0u32.to_le_bytes());
+        dib.extend_from_slice(&0u32.to_le_bytes());
+
+        for pixel in image.pixels() {
+            let [red, green, blue, alpha] = pixel.0;
+            dib.extend_from_slice(&[blue, green, red, alpha]);
+        }
+
+        Some(dib)
     }
 
     fn dib_pixel_offset(dib: &[u8]) -> Option<u32> {
