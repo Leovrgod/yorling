@@ -5,8 +5,9 @@ use std::ffi::c_void;
 use std::mem;
 use std::ptr;
 use std::sync::{
+    Arc, Mutex, OnceLock,
     atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering},
-    mpsc, Arc, Mutex, OnceLock,
+    mpsc,
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -15,24 +16,24 @@ use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
+    INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
     KEYEVENTF_KEYUP, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE,
     MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN,
-    MOUSEEVENTF_XUP, MOUSEINPUT, VK_0, VK_1, VK_2, VK_3, VK_4, VK_5, VK_6, VK_7, VK_8, VK_9, VK_A,
-    VK_B, VK_BACK, VK_C, VK_CONTROL, VK_D, VK_DOWN, VK_E, VK_END, VK_ESCAPE, VK_F, VK_G, VK_H,
-    VK_HOME, VK_I, VK_J, VK_K, VK_L, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_M,
-    VK_MENU, VK_N, VK_O, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_COMMA,
-    VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_P, VK_Q, VK_R, VK_RCONTROL, VK_RETURN, VK_RIGHT,
-    VK_RMENU, VK_RSHIFT, VK_RWIN, VK_S, VK_SHIFT, VK_SPACE, VK_T, VK_TAB, VK_U, VK_UP, VK_V, VK_W,
-    VK_X, VK_Y, VK_Z,
+    MOUSEEVENTF_XUP, MOUSEINPUT, SendInput, VK_0, VK_1, VK_2, VK_3, VK_4, VK_5, VK_6, VK_7, VK_8,
+    VK_9, VK_A, VK_B, VK_BACK, VK_C, VK_CONTROL, VK_D, VK_DOWN, VK_E, VK_END, VK_ESCAPE, VK_F,
+    VK_G, VK_H, VK_HOME, VK_I, VK_J, VK_K, VK_L, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT,
+    VK_LWIN, VK_M, VK_MENU, VK_N, VK_O, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6,
+    VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_P, VK_Q, VK_R, VK_RCONTROL,
+    VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_S, VK_SHIFT, VK_SPACE, VK_T, VK_TAB,
+    VK_U, VK_UP, VK_V, VK_W, VK_X, VK_Y, VK_Z,
 };
 use windows_sys::Win32::UI::Shell::IsUserAnAdmin;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetMessageW, PeekMessageW, PostThreadMessageW,
-    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT,
-    LLKHF_ALTDOWN, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN,
-    WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP,
-    WM_USER, WM_XBUTTONDOWN, XBUTTON1,
+    CallNextHookEx, DispatchMessageW, GetMessageW, HC_ACTION, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, MSG,
+    MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostThreadMessageW, SetWindowsHookExW,
+    TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP,
+    WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER,
+    WM_XBUTTONDOWN, XBUTTON1,
 };
 use yorling_core::keycode::{self, VirtualKeyCode};
 use yorling_engine::engine::{
@@ -47,6 +48,7 @@ const MOUSE_MOVE_SPEED_FAST: f64 = 1400.0;
 const MOUSE_MOVE_SPEED_SLOW: f64 = 360.0;
 const MOUSE_MOVE_TICK: Duration = Duration::from_micros(8_333);
 const MOUSE_MOVE_RESPONSE: f64 = 18.0;
+const MOUSE_ACTION_QUEUE_LIMIT: usize = 64;
 
 static HOOK_CONTEXT: OnceLock<Mutex<Option<Arc<HookContext>>>> = OnceLock::new();
 
@@ -92,17 +94,79 @@ impl SmoothMouseMotion {
     }
 }
 
+enum MouseCommand {
+    Move { dx: f64, dy: f64 },
+    Click(MouseButton),
+    Scroll(i32),
+    Shutdown,
+}
+
+struct MouseActionDispatcher {
+    sender: Mutex<Option<mpsc::SyncSender<MouseCommand>>>,
+    worker: Mutex<Option<thread::JoinHandle<()>>>,
+}
+
+impl MouseActionDispatcher {
+    fn new() -> Self {
+        Self {
+            sender: Mutex::new(None),
+            worker: Mutex::new(None),
+        }
+    }
+
+    fn start(&self) {
+        let mut sender = self.sender.lock().unwrap();
+        if sender.is_some() {
+            return;
+        }
+
+        let (tx, rx) = mpsc::sync_channel::<MouseCommand>(MOUSE_ACTION_QUEUE_LIMIT);
+        let handle = thread::spawn(move || {
+            while let Ok(command) = rx.recv() {
+                match command {
+                    MouseCommand::Move { dx, dy } => emit_mouse_move(dx, dy),
+                    MouseCommand::Click(button) => emit_mouse_click(button),
+                    MouseCommand::Scroll(lines) => emit_mouse_scroll(lines),
+                    MouseCommand::Shutdown => break,
+                }
+            }
+        });
+
+        *sender = Some(tx);
+        *self.worker.lock().unwrap() = Some(handle);
+    }
+
+    fn stop(&self) {
+        if let Some(sender) = self.sender.lock().unwrap().take() {
+            let _ = sender.try_send(MouseCommand::Shutdown);
+        }
+
+        if let Some(handle) = self.worker.lock().unwrap().take() {
+            let _ = handle.join();
+        }
+    }
+
+    fn dispatch(&self, command: MouseCommand) {
+        let sender = self.sender.lock().unwrap().clone();
+        if let Some(sender) = sender {
+            let _ = sender.try_send(command);
+        }
+    }
+}
+
 struct MouseMotionController {
     intent: Arc<Mutex<MouseMoveIntent>>,
     running: Arc<AtomicBool>,
+    mouse_actions: Arc<MouseActionDispatcher>,
     worker: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 impl MouseMotionController {
-    fn new() -> Self {
+    fn new(mouse_actions: Arc<MouseActionDispatcher>) -> Self {
         Self {
             intent: Arc::new(Mutex::new(MouseMoveIntent::default())),
             running: Arc::new(AtomicBool::new(false)),
+            mouse_actions,
             worker: Mutex::new(None),
         }
     }
@@ -114,6 +178,7 @@ impl MouseMotionController {
 
         let intent = Arc::clone(&self.intent);
         let running = Arc::clone(&self.running);
+        let mouse_actions = Arc::clone(&self.mouse_actions);
         let handle = thread::spawn(move || {
             let mut motion = SmoothMouseMotion::default();
             let mut last_tick = Instant::now();
@@ -125,7 +190,7 @@ impl MouseMotionController {
 
                 let current_intent = *intent.lock().unwrap();
                 if let Some((dx, dy)) = motion.step(current_intent, dt) {
-                    emit_mouse_move(dx, dy);
+                    mouse_actions.dispatch(MouseCommand::Move { dx, dy });
                 }
 
                 thread::sleep(MOUSE_MOVE_TICK);
@@ -160,11 +225,13 @@ struct HookContext {
     physical_keys: Mutex<HashSet<u16>>,
     synthetic_restored_modifiers: Mutex<HashSet<u16>>,
     system_action_handler: Mutex<Option<Arc<dyn Fn(SystemAction) + Send + Sync>>>,
+    mouse_actions: Arc<MouseActionDispatcher>,
     mouse_motion: MouseMotionController,
 }
 
 impl HookContext {
     fn new() -> Self {
+        let mouse_actions = Arc::new(MouseActionDispatcher::new());
         Self {
             engine: Mutex::new(MappingEngine::new_for_platform(MappingPlatform::Windows)),
             enabled: AtomicBool::new(false),
@@ -172,7 +239,8 @@ impl HookContext {
             physical_keys: Mutex::new(HashSet::new()),
             synthetic_restored_modifiers: Mutex::new(HashSet::new()),
             system_action_handler: Mutex::new(None),
-            mouse_motion: MouseMotionController::new(),
+            mouse_actions: Arc::clone(&mouse_actions),
+            mouse_motion: MouseMotionController::new(mouse_actions),
         }
     }
 }
@@ -222,6 +290,7 @@ impl WindowsKeyboardInterceptor {
         self.context
             .enabled
             .store(initially_enabled, Ordering::SeqCst);
+        self.context.mouse_actions.start();
 
         let context = Arc::clone(&self.context);
         let running = Arc::clone(&self.running);
@@ -270,6 +339,7 @@ impl WindowsKeyboardInterceptor {
 
             context.enabled.store(false, Ordering::SeqCst);
             context.mouse_motion.stop();
+            context.mouse_actions.stop();
             if let Ok(mut engine) = context.engine.lock() {
                 let flags = current_physical_flags(&context);
                 for key in engine.set_enabled(false) {
@@ -296,12 +366,14 @@ impl WindowsKeyboardInterceptor {
                 Ok(())
             }
             Ok(Err(error)) => {
+                self.context.mouse_actions.stop();
                 if let Some(handle) = self.worker.lock().unwrap().take() {
                     let _ = handle.join();
                 }
                 Err(error)
             }
             Err(_) => {
+                self.context.mouse_actions.stop();
                 if let Some(handle) = self.worker.lock().unwrap().take() {
                     let _ = handle.join();
                 }
@@ -333,6 +405,8 @@ impl WindowsKeyboardInterceptor {
         if let Some(handle) = self.worker.lock().unwrap().take() {
             let _ = handle.join();
         }
+        self.context.mouse_motion.stop();
+        self.context.mouse_actions.stop();
     }
 
     pub fn is_running(&self) -> bool {
@@ -774,14 +848,14 @@ fn dispatch_system_action(context: &HookContext, action: SystemAction) {
                 .update_intent(MouseMoveIntent { x, y, fast });
         }
         SystemAction::MouseClick { button } => {
-            emit_mouse_click(button);
+            context.mouse_actions.dispatch(MouseCommand::Click(button));
         }
         SystemAction::MouseScroll { direction } => {
             let lines = match direction {
                 MouseScrollDirection::Up => MOUSE_SCROLL_LINES,
                 MouseScrollDirection::Down => -MOUSE_SCROLL_LINES,
             };
-            emit_mouse_scroll(lines);
+            context.mouse_actions.dispatch(MouseCommand::Scroll(lines));
         }
         SystemAction::MouseModeChanged { active } => {
             if !active {

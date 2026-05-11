@@ -35,3 +35,19 @@ test('wires Windows tray icon to left-click and menu keyboard mapping controls',
   assert.strictEqual(keyboardCommandSource.includes('crate::windows_tray::refresh(&app'), true);
   assert.strictEqual(hookSource.includes("listen<boolean>('keyboard-tray-status-changed'"), true);
 });
+
+test('cleans up Windows keyboard mapping from the shared app exit path', () => {
+  const libSource = readFileSync('src-tauri/src/lib.rs', 'utf8');
+  const traySource = readFileSync('src-tauri/src/windows_tray.rs', 'utf8');
+
+  assert.strictEqual(libSource.includes('fn cleanup_platform_runtimes<R: Runtime>'), true);
+  assert.match(
+    libSource,
+    /#\[cfg\(target_os = "windows"\)\][\s\S]*state::<Arc<InterceptorState>>\(\)[\s\S]*shutdown_windows_keyboard_mapping\(\);/,
+  );
+  assert.match(
+    libSource,
+    /tauri::RunEvent::ExitRequested \{ \.\. \} \| tauri::RunEvent::Exit => \{\s*cleanup_platform_runtimes\(app_handle\);/,
+  );
+  assert.strictEqual(traySource.includes('state_for_quit.shutdown_windows_keyboard_mapping();'), true);
+});

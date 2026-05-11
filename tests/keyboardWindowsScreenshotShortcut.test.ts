@@ -121,3 +121,28 @@ test('clears synthetic restored modifiers before Windows mouse clicks', () => {
     /record_synthetic_modifier_restores\(context, physical_flags & !desired_flags\);[\s\S]*emit_synthetic_key\(key\.keycode, key\.key_down, desired_flags, physical_flags\);/s,
   );
 });
+
+test('dispatches Windows mouse actions outside the low-level keyboard hook', () => {
+  const windowsKeyboardSource = readFileSync('src-tauri/src/windows_keyboard.rs', 'utf8');
+  const keyboardHookMatch = windowsKeyboardSource.match(
+    /unsafe extern "system" fn low_level_keyboard_proc[\s\S]*?\n}\n\nfn is_native_alt_tab_event/,
+  );
+
+  assert.ok(keyboardHookMatch);
+  assert.strictEqual(windowsKeyboardSource.includes('enum MouseCommand'), true);
+  assert.strictEqual(windowsKeyboardSource.includes('struct MouseActionDispatcher'), true);
+  assert.strictEqual(windowsKeyboardSource.includes('mpsc::sync_channel::<MouseCommand>(MOUSE_ACTION_QUEUE_LIMIT)'), true);
+  assert.strictEqual(windowsKeyboardSource.includes('sender.try_send(command)'), true);
+  assert.strictEqual(
+    keyboardHookMatch?.[0].includes('emit_mouse_click') || keyboardHookMatch?.[0].includes('emit_mouse_scroll'),
+    false,
+  );
+  assert.match(
+    windowsKeyboardSource,
+    /SystemAction::MouseClick \{ button \} => \{\s*context\.mouse_actions\.dispatch\(MouseCommand::Click\(button\)\);/s,
+  );
+  assert.match(
+    windowsKeyboardSource,
+    /SystemAction::MouseScroll \{ direction \} => \{[\s\S]*context\.mouse_actions\.dispatch\(MouseCommand::Scroll\(lines\)\);/s,
+  );
+});

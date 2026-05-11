@@ -169,6 +169,16 @@ const fn should_start_island_runtime() -> bool {
     cfg!(any(target_os = "macos", target_os = "windows"))
 }
 
+fn cleanup_platform_runtimes<R: Runtime>(_app_handle: &tauri::AppHandle<R>) {
+    #[cfg(target_os = "macos")]
+    commands::super_right_click::shutdown_super_right_click_runtime();
+
+    #[cfg(target_os = "windows")]
+    _app_handle
+        .state::<Arc<InterceptorState>>()
+        .shutdown_windows_keyboard_mapping();
+}
+
 pub fn run() {
     env_logger::init();
 
@@ -378,9 +388,8 @@ pub fn run() {
                 present_main_window(app_handle, MainWindowLifecycle::Ready);
             }
         }
-        #[cfg(target_os = "macos")]
         tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
-            commands::super_right_click::shutdown_super_right_click_runtime();
+            cleanup_platform_runtimes(app_handle);
         }
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen {
