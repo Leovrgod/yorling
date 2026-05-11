@@ -6,9 +6,8 @@
 use std::os::raw::c_void;
 use std::ptr;
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering},
-    mpsc,
+    mpsc, Arc, Mutex,
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -185,6 +184,12 @@ struct MouseMoveIntent {
     fast: bool,
 }
 
+impl MouseMoveIntent {
+    fn is_idle(self) -> bool {
+        self.x == 0 && self.y == 0
+    }
+}
+
 #[derive(Debug, Default)]
 struct SmoothMouseMotion {
     velocity_x: f64,
@@ -213,6 +218,25 @@ impl SmoothMouseMotion {
     }
 }
 
+#[derive(Debug, Default)]
+struct CursorMotionState {
+    position: Option<CGPoint>,
+}
+
+impl CursorMotionState {
+    fn next_position(&mut self, dx: f64, dy: f64) -> CGPoint {
+        let mut position = self.position.unwrap_or_else(get_cursor_position);
+        position.x += dx;
+        position.y += dy;
+        self.position = Some(position);
+        position
+    }
+
+    fn reset(&mut self) {
+        self.position = None;
+    }
+}
+
 struct MouseMotionController {
     intent: Arc<Mutex<MouseMoveIntent>>,
     running: Arc<AtomicBool>,
@@ -237,7 +261,9 @@ impl MouseMotionController {
         let running = Arc::clone(&self.running);
         let handle = thread::spawn(move || {
             let mut motion = SmoothMouseMotion::default();
+            let mut cursor = CursorMotionState::default();
             let mut last_tick = Instant::now();
+            let mut next_tick = last_tick + MOUSE_MOVE_TICK;
 
             while running.load(Ordering::SeqCst) {
                 let now = Instant::now();
@@ -245,11 +271,21 @@ impl MouseMotionController {
                 last_tick = now;
 
                 let current_intent = *intent.lock().unwrap();
-                if let Some((dx, dy)) = motion.step(current_intent, dt) {
-                    emit_mouse_move(dx, dy);
+                if current_intent.is_idle() {
+                    let _ = motion.step(current_intent, dt);
+                    cursor.reset();
+                } else if let Some((dx, dy)) = motion.step(current_intent, dt) {
+                    emit_mouse_move_to(cursor.next_position(dx, dy));
                 }
 
-                thread::sleep(MOUSE_MOVE_TICK);
+                let after_work = Instant::now();
+                if after_work < next_tick {
+                    thread::sleep(next_tick - after_work);
+                } else {
+                    next_tick = after_work;
+                    thread::yield_now();
+                }
+                next_tick += MOUSE_MOVE_TICK;
             }
         });
 
@@ -598,18 +634,13 @@ fn get_cursor_position() -> CGPoint {
     }
 }
 
-/// Move the mouse cursor by (dx, dy) pixels from its current position.
-fn emit_mouse_move(dx: f64, dy: f64) {
-    let pos = get_cursor_position();
-    let new_pos = CGPoint {
-        x: pos.x + dx,
-        y: pos.y + dy,
-    };
+/// Move the mouse cursor to an absolute position.
+fn emit_mouse_move_to(position: CGPoint) {
     unsafe {
         let event = CGEventCreateMouseEvent(
             ptr::null(),
             K_CG_EVENT_MOUSE_MOVED,
-            new_pos,
+            position,
             0, // button (ignored for mouse moved)
         );
         if !event.is_null() {
@@ -1028,11 +1059,9 @@ mod tests {
 
         assert!(second.0.abs() > first.0.abs());
         assert!(second.1.abs() <= first.1.abs());
-        assert!(
-            motion
-                .step(MouseMoveIntent::default(), Duration::from_millis(8))
-                .is_none()
-        );
+        assert!(motion
+            .step(MouseMoveIntent::default(), Duration::from_millis(8))
+            .is_none());
     }
 
     #[test]
