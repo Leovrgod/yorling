@@ -106,7 +106,6 @@
 
 .workspace-header-actions .language-switcher,
 .workspace-header-actions .theme-switcher,
-.workspace-header-actions .update-control,
 .workspace-header-actions .startup-toggle,
 .workspace-header-actions .workspace-permission-toggle,
 .workspace-header-actions .workspace-status-chip {
@@ -1116,39 +1115,6 @@ body.sidebar-resizing .sidebar-divider::before {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   line-height: 1;
-}
-
-.update-control {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 20px;
-  padding: 0;
-  border: none;
-  border-radius: 0;
-  background: none;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-semibold);
-  line-height: 1;
-  transition: color var(--transition-normal), opacity var(--transition-normal);
-  opacity: 0.76;
-}
-
-.update-control:hover:not(:disabled),
-.update-control--available,
-.update-control--current {
-  color: var(--color-text);
-  opacity: 1;
-}
-
-.update-control:disabled {
-  cursor: default;
-  opacity: 0.58;
-}
-
-.update-control__label {
-  white-space: nowrap;
 }
 
 /* ═══════════════════════════════════════

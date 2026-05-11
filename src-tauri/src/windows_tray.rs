@@ -9,18 +9,27 @@ use tauri::{AppHandle, Emitter};
 
 const TRAY_ID: &str = "yorling-keyboard-tray";
 const OPEN_WINDOW_MENU_ID: &str = "yorling-tray-open-window";
+const TOGGLE_MAPPING_MENU_ID: &str = "yorling-tray-toggle-mapping";
 const QUIT_MENU_ID: &str = "yorling-tray-quit";
 const TRAY_EVENT: &str = "keyboard-tray-status-changed";
 
 pub fn setup(app: &AppHandle, interceptor_state: Arc<InterceptorState>) -> tauri::Result<()> {
     let open_window_item =
         MenuItem::with_id(app, OPEN_WINDOW_MENU_ID, "打开 Yorling", true, None::<&str>)?;
+    let toggle_mapping_item = MenuItem::with_id(
+        app,
+        TOGGLE_MAPPING_MENU_ID,
+        "切换键盘映射",
+        true,
+        None::<&str>,
+    )?;
     let quit_item = MenuItem::with_id(app, QUIT_MENU_ID, "退出 Yorling", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open_window_item, &quit_item])?;
+    let menu = Menu::with_items(app, &[&open_window_item, &toggle_mapping_item, &quit_item])?;
     let initial_active = interceptor_state.windows_keyboard_mapping_active();
 
     let state_for_click = Arc::clone(&interceptor_state);
     let state_for_menu = Arc::clone(&interceptor_state);
+    let state_for_quit = Arc::clone(&interceptor_state);
 
     TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
@@ -51,8 +60,18 @@ pub fn setup(app: &AppHandle, interceptor_state: Arc<InterceptorState>) -> tauri
         .on_menu_event(move |app, event| {
             if event.id() == OPEN_WINDOW_MENU_ID {
                 crate::present_main_window(app, crate::MainWindowLifecycle::Ready);
+            } else if event.id() == TOGGLE_MAPPING_MENU_ID {
+                let active = match state_for_menu.toggle_windows_keyboard_mapping() {
+                    Ok(active) => active,
+                    Err(error) => {
+                        log::warn!("Failed to toggle Windows keyboard mapping from tray: {error}");
+                        state_for_menu.windows_keyboard_mapping_active()
+                    }
+                };
+
+                refresh(app, active);
             } else if event.id() == QUIT_MENU_ID {
-                state_for_menu.shutdown_windows_keyboard_mapping();
+                state_for_quit.shutdown_windows_keyboard_mapping();
                 app.exit(0);
             }
         })

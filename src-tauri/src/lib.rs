@@ -5,6 +5,8 @@ mod island;
 #[cfg(target_os = "windows")]
 mod windows_keyboard;
 #[cfg(target_os = "windows")]
+mod windows_single_instance;
+#[cfg(target_os = "windows")]
 mod windows_tray;
 #[cfg(target_os = "windows")]
 mod windows_window;
@@ -169,6 +171,11 @@ const fn should_start_island_runtime() -> bool {
 
 pub fn run() {
     env_logger::init();
+
+    #[cfg(target_os = "windows")]
+    if !windows_single_instance::claim_or_focus_existing(!launched_from_windows_autostart()) {
+        return;
+    }
 
     let interceptor_state = Arc::new(InterceptorState::new());
     let island_state = Arc::new(IslandState::new());

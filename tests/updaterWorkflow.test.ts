@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-test('wires the Tauri updater through a guarded in-app update control', () => {
+test('keeps the Tauri updater backend wired without showing an in-app update control', () => {
   const cargoSource = readFileSync('src-tauri/Cargo.toml', 'utf8');
   const libSource = readFileSync('src-tauri/src/lib.rs', 'utf8');
   const commandsSource = readFileSync('src-tauri/src/commands/mod.rs', 'utf8');
@@ -17,9 +17,9 @@ test('wires the Tauri updater through a guarded in-app update control', () => {
   assert.strictEqual(updaterSource.includes('option_env!("YORLING_UPDATER_PUBKEY")'), true);
   assert.strictEqual(updaterSource.includes('check_app_update'), true);
   assert.strictEqual(updaterSource.includes('install_app_update'), true);
-  assert.strictEqual(appSource.includes('<UpdateControl language={language} />'), true);
-  assert.strictEqual(appSource.includes("invoke<AppUpdateCheckResult>('check_app_update')"), true);
-  assert.strictEqual(appSource.includes("invoke('install_app_update')"), true);
+  assert.strictEqual(appSource.includes('<UpdateControl language={language} />'), false);
+  assert.strictEqual(appSource.includes("invoke<AppUpdateCheckResult>('check_app_update')"), false);
+  assert.strictEqual(appSource.includes("invoke('install_app_update')"), false);
 });
 
 test('release script creates updater artifacts and a static manifest when configured', () => {

@@ -44,18 +44,6 @@ const MultiTerminal = lazy(() =>
   import('./components/terminals/MultiTerminal').then((m) => ({ default: m.MultiTerminal })),
 );
 
-type UpdateControlPhase = 'idle' | 'checking' | 'available' | 'installing' | 'current' | 'unconfigured' | 'error';
-
-type AppUpdateCheckResult = {
-  configured: boolean;
-  available: boolean;
-  currentVersion: string;
-  version: string | null;
-  date: string | null;
-  notes: string | null;
-  message: string | null;
-};
-
 function ThemeSwitcher({
   theme,
   setTheme,
@@ -112,101 +100,6 @@ function LanguageSwitcher({
         </button>
       ))}
     </div>
-  );
-}
-
-function UpdateControl({ language }: { language: AppLanguageId }) {
-  const copy = getUiCopy(language);
-  const [phase, setPhase] = useState<UpdateControlPhase>('idle');
-  const [update, setUpdate] = useState<AppUpdateCheckResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const busy = phase === 'checking' || phase === 'installing';
-  const nextVersion = update?.version ?? null;
-  const title = error
-    ?? update?.notes
-    ?? update?.message
-    ?? (nextVersion ? copy.titlebar.updateAvailableTitle(nextVersion) : copy.titlebar.checkForUpdates);
-
-  const label = (() => {
-    switch (phase) {
-      case 'checking':
-        return copy.titlebar.checkingForUpdates;
-      case 'available':
-        return copy.titlebar.installUpdate;
-      case 'installing':
-        return copy.titlebar.installingUpdate;
-      case 'current':
-        return copy.titlebar.upToDate;
-      case 'unconfigured':
-        return copy.titlebar.updateNotConfigured;
-      case 'error':
-        return copy.titlebar.updateRetry;
-      case 'idle':
-      default:
-        return copy.titlebar.updateLabel;
-    }
-  })();
-
-  const checkForUpdate = async () => {
-    if (busy) return;
-    setError(null);
-    setPhase('checking');
-
-    try {
-      const result = await invoke<AppUpdateCheckResult>('check_app_update');
-      setUpdate(result);
-
-      if (!result.configured) {
-        setPhase('unconfigured');
-      } else if (result.available) {
-        setPhase('available');
-      } else {
-        setPhase('current');
-      }
-    } catch (error) {
-      console.error('Failed to check for updates.', error);
-      setError(error instanceof Error ? error.message : String(error));
-      setPhase('error');
-    }
-  };
-
-  const installUpdate = async () => {
-    if (busy) return;
-    setError(null);
-    setPhase('installing');
-
-    try {
-      await invoke('install_app_update');
-    } catch (error) {
-      console.error('Failed to install update.', error);
-      setError(error instanceof Error ? error.message : String(error));
-      setPhase('available');
-    }
-  };
-
-  const handleClick = () => {
-    if (phase === 'available') {
-      void installUpdate();
-      return;
-    }
-    void checkForUpdate();
-  };
-
-  return (
-    <button
-      type="button"
-      className={`update-control update-control--${phase}`}
-      title={title}
-      aria-label={title}
-      data-no-window-drag
-      disabled={busy}
-      onPointerDown={(event) => event.stopPropagation()}
-      onClick={handleClick}
-    >
-      <span className={`status-dot ${phase === 'available' ? 'warning' : phase === 'current' ? 'active' : ''}`} />
-      <span className="update-control__label">{label}</span>
-    </button>
   );
 }
 
@@ -622,7 +515,6 @@ function MainApp() {
           onOpenScreenRecording={() => void openScreenRecordingSettings()}
           utilityControls={(
             <>
-              <UpdateControl language={language} />
               <StartupToggle language={language} platform={platform} />
               <LanguageSwitcher language={language} setLanguage={setLanguage} />
               <ThemeSwitcher theme={theme} setTheme={setTheme} language={language} />
