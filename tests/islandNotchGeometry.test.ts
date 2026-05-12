@@ -42,7 +42,7 @@ test('keeps the collapsed island defaults and width stable', () => {
   assert.strictEqual(metrics.height, 32);
 });
 
-test('uses a flat top edge only when a real top inset is reserved', () => {
+test('keeps the island top corners rounded even when macOS reserves a top inset', () => {
   const topBarMetrics = getIslandSurfaceMetrics({
     progress: 0,
     sessionCount: 0,
@@ -59,6 +59,14 @@ test('uses a flat top edge only when a real top inset is reserved', () => {
     panelMode: 'sessions',
     measuredExpandedHeight: null,
   });
+  const expandedTopBarMetrics = getIslandSurfaceMetrics({
+    progress: 1,
+    sessionCount: 0,
+    screenInfo: makeScreenInfo({ placement_mode: 'top_bar', top_inset: 32 }),
+    openReason: 'click',
+    panelMode: 'sessions',
+    measuredExpandedHeight: null,
+  });
   const notchMetrics = getIslandSurfaceMetrics({
     progress: 0,
     sessionCount: 0,
@@ -68,9 +76,10 @@ test('uses a flat top edge only when a real top inset is reserved', () => {
     measuredExpandedHeight: null,
   });
 
-  assert.strictEqual(topBarMetrics.topRadius, 0);
-  assert.ok(floatingTopBarMetrics.topRadius > 0);
-  assert.ok(notchMetrics.topRadius > 0);
+  assert.strictEqual(topBarMetrics.topRadius, 6);
+  assert.strictEqual(floatingTopBarMetrics.topRadius, 6);
+  assert.strictEqual(notchMetrics.topRadius, 6);
+  assert.strictEqual(expandedTopBarMetrics.topRadius, 19);
 });
 
 

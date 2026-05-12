@@ -70,15 +70,9 @@ export function getIslandSurfaceMetrics({
     progress: clampedProgress,
     width: lerp(closedSize.width, openedSize.width, clampedProgress),
     height: lerp(closedSize.height, openedSize.height, clampedProgress),
-    topRadius: shouldUseFlatTopEdge(screenInfo)
-      ? 0
-      : lerp(CLOSED_TOP_RADIUS, OPEN_TOP_RADIUS, clampedProgress),
+    topRadius: lerp(CLOSED_TOP_RADIUS, OPEN_TOP_RADIUS, clampedProgress),
     bottomRadius: lerp(CLOSED_BOTTOM_RADIUS, OPEN_BOTTOM_RADIUS, clampedProgress),
   };
-}
-
-function shouldUseFlatTopEdge(screenInfo: IslandScreenInfo | null) {
-  return screenInfo?.placement_mode === 'top_bar' && screenInfo.top_inset > 0;
 }
 
 export function getClosedIslandSize(screenInfo: IslandScreenInfo | null) {
