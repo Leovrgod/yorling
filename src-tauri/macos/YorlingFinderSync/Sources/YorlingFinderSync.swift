@@ -162,11 +162,21 @@ final class YorlingFinderSync: FIFinderSync {
     private var titleToAction: [String: YorlingFinderAction] = [:]
     private var tagToAction: [Int: YorlingFinderAction] = [:]
     private var nextMenuTag = 10_000
+    private var monitoredDirectoryRefreshTimer: Timer?
+    private var monitoredDirectoryObservers: [NSObjectProtocol] = []
+    private var lastMonitoredDirectoryPaths = Set<String>()
 
     override init() {
         super.init()
         configureMonitoredDirectories()
+        startMonitoredDirectoryRefresh()
         log("initialized")
+    }
+
+    deinit {
+        monitoredDirectoryRefreshTimer?.invalidate()
+        let notificationCenter = NSWorkspace.shared.notificationCenter
+        monitoredDirectoryObservers.forEach(notificationCenter.removeObserver)
     }
 
     override var toolbarItemName: String {
@@ -357,12 +367,46 @@ final class YorlingFinderSync: FIFinderSync {
     private func configureMonitoredDirectories() {
         let directories = monitoredDirectoryURLs()
         FIFinderSyncController.default().directoryURLs = Set(directories)
-        log("monitoring \(directories.map(\.path).joined(separator: ", "))")
+
+        let directoryPaths = Set(directories.map(\.path))
+        if directoryPaths != lastMonitoredDirectoryPaths {
+            lastMonitoredDirectoryPaths = directoryPaths
+            log("monitoring \(directories.map(\.path).joined(separator: ", "))")
+        }
+    }
+
+    private func startMonitoredDirectoryRefresh() {
+        let notificationCenter = NSWorkspace.shared.notificationCenter
+        let notificationNames: [Notification.Name] = [
+            NSWorkspace.didMountNotification,
+            NSWorkspace.didUnmountNotification,
+            NSWorkspace.didRenameVolumeNotification,
+            NSWorkspace.didWakeNotification,
+        ]
+
+        monitoredDirectoryObservers = notificationNames.map { name in
+            notificationCenter.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.configureMonitoredDirectories()
+            }
+        }
+
+        let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+            self?.configureMonitoredDirectories()
+        }
+        timer.tolerance = 10
+        RunLoop.main.add(timer, forMode: .common)
+        monitoredDirectoryRefreshTimer = timer
     }
 
     private func monitoredDirectoryURLs() -> [URL] {
-        let candidates = [
+        var candidates = [
             realHomeDirectory(),
+            URL(fileURLWithPath: "/Users", isDirectory: true),
+            URL(fileURLWithPath: "/Users/Shared", isDirectory: true),
             URL(fileURLWithPath: "/", isDirectory: true),
             URL(fileURLWithPath: "/Applications", isDirectory: true),
             URL(fileURLWithPath: "/System/Applications", isDirectory: true),
@@ -370,6 +414,8 @@ final class YorlingFinderSync: FIFinderSync {
             URL(fileURLWithPath: "/System/Library/CoreServices/Applications", isDirectory: true),
             URL(fileURLWithPath: "/Volumes", isDirectory: true),
         ]
+        candidates.append(contentsOf: userDirectoryURLs())
+        candidates.append(contentsOf: mountedVolumeRootURLs())
 
         var seen = Set<String>()
         return candidates.compactMap { candidate in
@@ -388,6 +434,37 @@ final class YorlingFinderSync: FIFinderSync {
 
             seen.insert(key)
             return standardized
+        }
+    }
+
+    private func userDirectoryURLs() -> [URL] {
+        let searchDirectories: [FileManager.SearchPathDirectory] = [
+            .desktopDirectory,
+            .documentDirectory,
+            .downloadsDirectory,
+            .moviesDirectory,
+            .musicDirectory,
+            .picturesDirectory,
+            .applicationDirectory,
+        ]
+
+        return searchDirectories.compactMap {
+            FileManager.default.urls(for: $0, in: .userDomainMask).first
+        }
+    }
+
+    private func mountedVolumeRootURLs() -> [URL] {
+        let resourceKeys: [URLResourceKey] = [.volumeIsBrowsableKey]
+        guard let volumeURLs = FileManager.default.mountedVolumeURLs(
+            includingResourceValuesForKeys: resourceKeys,
+            options: []
+        ) else {
+            return []
+        }
+
+        return volumeURLs.filter { volumeURL in
+            let values = try? volumeURL.resourceValues(forKeys: Set(resourceKeys))
+            return values?.volumeIsBrowsable != false
         }
     }
 
@@ -528,7 +605,7 @@ final class YorlingFinderSync: FIFinderSync {
             DistributedNotificationCenter.default().post(name: Self.finderActionRequestNotification, object: nil)
             let appRunning = containingAppIsRunning()
             if !appRunning {
-                openContainingApp(activates: false)
+                openContainingAppForFinderAction()
             }
             log("queued main app action=\(action.rawValue) request=\(requestURL.path) directory=\(context.targetDirectory?.path ?? "nil") appRunning=\(appRunning)")
         } catch {
@@ -552,6 +629,15 @@ final class YorlingFinderSync: FIFinderSync {
                 self.log("failed to open containing app: \(error.localizedDescription)")
             }
         }
+    }
+
+    private func openContainingAppForFinderAction() {
+        let appURL = containingAppBundleURL()
+        if runProcess("/usr/bin/open", arguments: ["-g", "-j", appURL.path]) == 0 {
+            return
+        }
+
+        openContainingApp(activates: false)
     }
 
     private func containingAppIsRunning() -> Bool {
@@ -579,11 +665,7 @@ final class YorlingFinderSync: FIFinderSync {
 
     private func isSuperRightClickEnabled() -> Bool {
         let state = sharedState()
-        guard (state["enabled"] as? Bool) ?? false else {
-            return false
-        }
-
-        return runtimeLeaseIsCurrent(in: state)
+        return (state["enabled"] as? Bool) ?? false
     }
 
     private func runtimeLeaseIsCurrent(in state: [String: Any]) -> Bool {

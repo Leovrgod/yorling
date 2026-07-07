@@ -6000,7 +6000,7 @@ dependencies = [
 
 [[package]]
 name = "yorling"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6037,7 +6037,7 @@ dependencies = [
 
 [[package]]
 name = "yorling-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -6046,7 +6046,7 @@ dependencies = [
 
 [[package]]
 name = "yorling-engine"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "log",
  "yorling-core",
@@ -6054,7 +6054,7 @@ dependencies = [
 
 [[package]]
 name = "yorling-island-bridge"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "libc",
@@ -6065,7 +6065,7 @@ dependencies = [
 
 [[package]]
 name = "yorling-island-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6082,7 +6082,7 @@ dependencies = [
 
 [[package]]
 name = "yorling-platform-macos"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "core-foundation",
  "log",

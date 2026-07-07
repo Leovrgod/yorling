@@ -28,6 +28,8 @@ const FINDER_ACTION_POLL_INTERVAL_MS: u64 = 500;
 #[cfg(target_os = "macos")]
 const FINDER_ACTION_REQUEST_MAX_AGE_MS: u64 = 30_000;
 #[cfg(target_os = "macos")]
+const FINDER_ACTION_BACKGROUND_LAUNCH_SUPPRESS_MS: u64 = 5_000;
+#[cfg(target_os = "macos")]
 const SUPER_RIGHT_CLICK_RUNTIME_HEARTBEAT_INTERVAL_MS: u64 = 10_000;
 #[cfg(target_os = "macos")]
 const SUPER_RIGHT_CLICK_RUNTIME_LEASE_MAX_AGE_MS: u64 = 45_000;
@@ -66,6 +68,8 @@ const SYNTHETIC_EVENT_TAG: i64 = 0x594F524C; // "YORL"
 static SUPER_RIGHT_CLICK_RUNTIME_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "macos")]
 static SHARED_STATE_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+#[cfg(target_os = "macos")]
+static LAST_FINDER_ACTION_ACTIVITY_AT_MS: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(target_os = "macos")]
 type CGEventRef = *mut c_void;
@@ -296,6 +300,18 @@ pub fn has_recent_pending_finder_action_request() -> bool {
     #[cfg(target_os = "macos")]
     {
         pending_finder_action_request_is_recent(&finder_action_request_path())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+pub fn should_suppress_main_window_for_finder_action_launch() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        has_recent_pending_finder_action_request() || recent_finder_action_activity_is_current()
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -740,7 +756,28 @@ fn consume_pending_finder_action_request(app_handle: &AppHandle) -> Result<(), S
         return Ok(());
     }
 
+    record_recent_finder_action_activity();
     execute_finder_action_request(app_handle, &request)
+}
+
+#[cfg(target_os = "macos")]
+fn record_recent_finder_action_activity() {
+    LAST_FINDER_ACTION_ACTIVITY_AT_MS.store(current_unix_millis(), Ordering::SeqCst);
+}
+
+#[cfg(target_os = "macos")]
+fn recent_finder_action_activity_is_current() -> bool {
+    let recorded_at = LAST_FINDER_ACTION_ACTIVITY_AT_MS.load(Ordering::SeqCst);
+    if recorded_at == 0 {
+        return false;
+    }
+
+    let now = current_unix_millis();
+    if recorded_at > now.saturating_add(5_000) {
+        return false;
+    }
+
+    now.saturating_sub(recorded_at) <= FINDER_ACTION_BACKGROUND_LAUNCH_SUPPRESS_MS
 }
 
 #[cfg(target_os = "macos")]
@@ -769,8 +806,26 @@ fn execute_finder_action_request(
 #[cfg(target_os = "macos")]
 fn toggle_hidden_files_from_main_app() -> Result<(), String> {
     ensure_accessibility_permission_for_finder_shortcut()?;
+    activate_finder_for_finder_shortcut()?;
     post_finder_hidden_files_shortcut()?;
     log_finder_action("toggleHiddenFiles completed via Finder keyboard shortcut");
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn activate_finder_for_finder_shortcut() -> Result<(), String> {
+    let status = Command::new("/usr/bin/open")
+        .args(["-b", "com.apple.finder"])
+        .status()
+        .map_err(|error| format!("Failed to activate Finder before shortcut: {error}"))?;
+
+    if !status.success() {
+        return Err(format!(
+            "Failed to activate Finder before shortcut; open exited with {status}"
+        ));
+    }
+
+    std::thread::sleep(std::time::Duration::from_millis(120));
     Ok(())
 }
 

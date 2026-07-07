@@ -282,7 +282,7 @@ pub fn run() {
             {
                 // FinderSync stays lightweight and hands heavier Finder actions to the main app.
                 suppress_ready_presentation_for_setup.store(
-                    commands::super_right_click::has_recent_pending_finder_action_request(),
+                    commands::super_right_click::should_suppress_main_window_for_finder_action_launch(),
                     Ordering::SeqCst,
                 );
                 commands::super_right_click::start_super_right_click_runtime_heartbeat();
@@ -380,7 +380,15 @@ pub fn run() {
 
     app.run(move |app_handle, event| match event {
         tauri::RunEvent::Ready => {
-            if suppress_ready_presentation_for_run.swap(false, Ordering::SeqCst) {
+            #[cfg(target_os = "macos")]
+            let suppress_finder_action_presentation =
+                suppress_ready_presentation_for_run.swap(false, Ordering::SeqCst)
+                    || commands::super_right_click::should_suppress_main_window_for_finder_action_launch();
+            #[cfg(not(target_os = "macos"))]
+            let suppress_finder_action_presentation =
+                suppress_ready_presentation_for_run.swap(false, Ordering::SeqCst);
+
+            if suppress_finder_action_presentation {
                 log::info!("Suppressing main window presentation for Finder action launch");
             } else if launched_from_windows_autostart() {
                 log::info!("Suppressing main window presentation for Windows autostart launch");
@@ -395,12 +403,19 @@ pub fn run() {
         tauri::RunEvent::Reopen {
             has_visible_windows,
             ..
-        } => present_main_window(
-            app_handle,
-            MainWindowLifecycle::Reopen {
-                has_visible_windows,
-            },
-        ),
+        } => {
+            if commands::super_right_click::should_suppress_main_window_for_finder_action_launch()
+            {
+                log::info!("Suppressing main window reopen for Finder action launch");
+            } else {
+                present_main_window(
+                    app_handle,
+                    MainWindowLifecycle::Reopen {
+                        has_visible_windows,
+                    },
+                );
+            }
+        }
         _ => {}
     });
 }

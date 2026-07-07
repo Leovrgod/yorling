@@ -75,6 +75,9 @@ test('wires super right click through FinderSync without a fallback menu window'
   assert.strictEqual(commandSource.includes('runtime_active'), true);
   assert.strictEqual(commandSource.includes('runtime_updated_at'), true);
   assert.strictEqual(commandSource.includes('runtime_lease_is_current'), true);
+  assert.strictEqual(commandSource.includes('LAST_FINDER_ACTION_ACTIVITY_AT_MS'), true);
+  assert.strictEqual(commandSource.includes('should_suppress_main_window_for_finder_action_launch'), true);
+  assert.strictEqual(commandSource.includes('FINDER_ACTION_BACKGROUND_LAUNCH_SUPPRESS_MS'), true);
   assert.strictEqual(commandSource.includes('SHARED_STATE_WRITE_SEQUENCE'), true);
   assert.strictEqual(commandSource.includes('start_super_right_click_runtime_heartbeat'), true);
   assert.strictEqual(commandSource.includes('shutdown_super_right_click_runtime'), true);
@@ -90,6 +93,8 @@ test('wires super right click through FinderSync without a fallback menu window'
   assert.strictEqual(commandSource.includes('finder_action_request_is_current'), true);
   assert.strictEqual(commandSource.includes('finder-action-request.json'), true);
   assert.strictEqual(commandSource.includes('toggle_hidden_files_from_main_app'), true);
+  assert.strictEqual(commandSource.includes('activate_finder_for_finder_shortcut'), true);
+  assert.strictEqual(commandSource.includes('.args(["-b", "com.apple.finder"])'), true);
   assert.strictEqual(commandSource.includes('snap_to_grid_from_main_app'), true);
   assert.strictEqual(commandSource.includes('move_to_folder_from_main_app'), true);
   assert.strictEqual(commandSource.includes('blocking_pick_folder'), false);
@@ -149,7 +154,12 @@ test('wires super right click through FinderSync without a fallback menu window'
   assert.strictEqual(finderSyncSource.includes('queueMainAppAction(action, context: context)'), true);
   assert.strictEqual(finderSyncSource.includes('selectedPaths = context.movableURLs.map(\\.path)'), true);
   assert.strictEqual(finderSyncSource.includes('monitoredDirectoryURLs'), true);
+  assert.strictEqual(finderSyncSource.includes('mountedVolumeRootURLs'), true);
+  assert.strictEqual(finderSyncSource.includes('mountedVolumeURLs'), true);
+  assert.strictEqual(finderSyncSource.includes('NSWorkspace.didMountNotification'), true);
+  assert.strictEqual(finderSyncSource.includes('NSWorkspace.didWakeNotification'), true);
   assert.strictEqual(finderSyncSource.includes('URL(fileURLWithPath: "/", isDirectory: true)'), true);
+  assert.strictEqual(finderSyncSource.includes('URL(fileURLWithPath: "/Users/Shared", isDirectory: true)'), true);
   assert.strictEqual(finderSyncSource.includes('URL(fileURLWithPath: "/Applications", isDirectory: true)'), true);
   assert.strictEqual(finderSyncSource.includes('URL(fileURLWithPath: "/System/Applications", isDirectory: true)'), true);
   assert.strictEqual(finderSyncSource.includes('URL(fileURLWithPath: "/Volumes", isDirectory: true)'), true);
@@ -168,6 +178,8 @@ test('wires super right click through FinderSync without a fallback menu window'
   assert.strictEqual(commandsModSource.includes('pub mod super_right_click;'), true);
   assert.strictEqual(libSource.includes('SuperRightClickState::new()'), true);
   assert.strictEqual(libSource.includes('Suppressing main window presentation for Finder action launch'), true);
+  assert.strictEqual(libSource.includes('Suppressing main window reopen for Finder action launch'), true);
+  assert.strictEqual(libSource.includes('should_suppress_main_window_for_finder_action_launch()'), true);
   assert.strictEqual(libSource.includes('commands::super_right_click::bootstrap_super_right_click_if_enabled()'), true);
   assert.strictEqual(libSource.includes('commands::super_right_click::start_super_right_click_runtime_heartbeat()'), true);
   assert.strictEqual(libSource.includes('commands::super_right_click::shutdown_super_right_click_runtime()'), true);
@@ -196,6 +208,8 @@ test('wires super right click through FinderSync without a fallback menu window'
   assert.strictEqual(finderSyncSource.includes('DistributedNotificationCenter.default().post'), true);
   assert.strictEqual(finderSyncSource.includes('finder-action-request.json'), true);
   assert.strictEqual(finderSyncSource.includes('containingAppIsRunning()'), true);
+  assert.strictEqual(finderSyncSource.includes('openContainingAppForFinderAction'), true);
+  assert.strictEqual(finderSyncSource.includes('arguments: ["-g", "-j", appURL.path]'), true);
   assert.strictEqual(finderSyncSource.includes('appRunning='), true);
   assert.strictEqual(finderSyncSource.includes('selectedTerminalID()'), true);
   assert.strictEqual(finderSyncSource.includes('NSWorkspace.OpenConfiguration'), true);
@@ -207,6 +221,7 @@ test('wires super right click through FinderSync without a fallback menu window'
   assert.strictEqual(finderSyncSource.includes('"/Applications/kitty.app/Contents/MacOS/kitty"'), false);
   assert.strictEqual(finderSyncSource.includes('super-right-click.json'), true);
   assert.strictEqual(finderSyncSource.includes('runtimeLeaseIsCurrent'), true);
+  assert.strictEqual(finderSyncSource.includes('return (state["enabled"] as? Bool) ?? false'), true);
   assert.strictEqual(finderSyncSource.includes('runtime_active'), true);
   assert.strictEqual(finderSyncSource.includes('runtime_updated_at'), true);
   assert.strictEqual(JSON.parse(tauriConfigSource).app.windows[0].visible, false);
