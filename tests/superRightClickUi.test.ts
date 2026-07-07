@@ -95,6 +95,9 @@ test('wires super right click through FinderSync without a fallback menu window'
   assert.strictEqual(commandSource.includes('toggle_hidden_files_from_main_app'), true);
   assert.strictEqual(commandSource.includes('activate_finder_for_finder_shortcut'), true);
   assert.strictEqual(commandSource.includes('.args(["-b", "com.apple.finder"])'), true);
+  assert.strictEqual(commandSource.includes('keep_finder_hidden_files_hidden_on_next_launch'), true);
+  assert.strictEqual(commandSource.includes('AppleShowAllFiles'), true);
+  assert.strictEqual(commandSource.includes('next Finder launch defaults to hidden files hidden'), true);
   assert.strictEqual(commandSource.includes('snap_to_grid_from_main_app'), true);
   assert.strictEqual(commandSource.includes('move_to_folder_from_main_app'), true);
   assert.strictEqual(commandSource.includes('blocking_pick_folder'), false);
@@ -109,6 +112,7 @@ test('wires super right click through FinderSync without a fallback menu window'
   assert.strictEqual(commandSource.includes('destination is the same'), true);
   assert.strictEqual(commandSource.includes('Command::new("/bin/mv")'), true);
   assert.strictEqual(commandSource.includes('killall'), false);
+  assert.strictEqual(commandSource.includes('"AppleShowAllFiles", "-bool", "true"'), false);
   assert.strictEqual(commandSource.includes('update every Finder window'), false);
   assert.strictEqual(commandSource.includes('CGEventCreateKeyboardEvent'), true);
   assert.strictEqual(commandSource.includes('AXIsProcessTrusted'), true);

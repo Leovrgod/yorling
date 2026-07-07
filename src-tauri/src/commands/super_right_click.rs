@@ -210,6 +210,7 @@ pub fn bootstrap_super_right_click_if_enabled() {
     #[cfg(target_os = "macos")]
     {
         tauri::async_runtime::spawn(async move {
+            let mut reset_hidden_files_startup_preference = false;
             for (attempt_index, delay_ms) in
                 FINDER_SYNC_BOOTSTRAP_RETRY_DELAYS_MS.iter().enumerate()
             {
@@ -224,6 +225,17 @@ pub fn bootstrap_super_right_click_if_enabled() {
                         "startup native bootstrap skipped because Super Right Click is disabled",
                     );
                     return;
+                }
+
+                if !reset_hidden_files_startup_preference {
+                    if let Err(error) =
+                        keep_finder_hidden_files_hidden_on_next_launch("startup")
+                    {
+                        log_finder_action(&format!(
+                            "startup hidden-files preference reset failed: {error}"
+                        ));
+                    }
+                    reset_hidden_files_startup_preference = true;
                 }
 
                 if let Err(error) = mark_super_right_click_runtime_active() {
@@ -526,6 +538,11 @@ impl SuperRightClickService {
 
         if enabled {
             mark_super_right_click_runtime_active()?;
+            if let Err(error) = keep_finder_hidden_files_hidden_on_next_launch("enabled") {
+                log_finder_action(&format!(
+                    "enable hidden-files preference reset failed: {error}"
+                ));
+            }
             ensure_finder_sync_extension_ready()?;
         } else {
             clear_super_right_click_runtime_lease()?;
@@ -808,7 +825,10 @@ fn toggle_hidden_files_from_main_app() -> Result<(), String> {
     ensure_accessibility_permission_for_finder_shortcut()?;
     activate_finder_for_finder_shortcut()?;
     post_finder_hidden_files_shortcut()?;
-    log_finder_action("toggleHiddenFiles completed via Finder keyboard shortcut");
+    keep_finder_hidden_files_hidden_on_next_launch("toggleHiddenFiles")?;
+    log_finder_action(
+        "toggleHiddenFiles completed via Finder keyboard shortcut; next Finder launch defaults to hidden files hidden",
+    );
     Ok(())
 }
 
@@ -1384,6 +1404,33 @@ fn post_finder_hidden_files_shortcut() -> Result<(), String> {
     std::thread::sleep(std::time::Duration::from_millis(24));
     post_keyboard_event(KEY_CODE_PERIOD, false, flags)?;
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn keep_finder_hidden_files_hidden_on_next_launch(reason: &str) -> Result<(), String> {
+    // Cmd+Shift+. is intentionally a live Finder toggle. Keep that behavior, but
+    // do not let Yorling leave Finder's next-launch default stuck on "show all".
+    std::thread::sleep(std::time::Duration::from_millis(120));
+    let output = Command::new("/usr/bin/defaults")
+        .args(["write", "com.apple.finder", "AppleShowAllFiles", "-bool", "false"])
+        .output()
+        .map_err(|error| {
+            format!("Failed to reset Finder hidden-files startup preference: {error}")
+        })?;
+
+    if output.status.success() {
+        log_finder_action(&format!(
+            "Finder hidden-files startup preference reset to hidden reason={reason}"
+        ));
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Err(format!(
+        "Failed to reset Finder hidden-files startup preference status={} stdout={} stderr={}",
+        output.status, stdout, stderr
+    ))
 }
 
 #[cfg(target_os = "macos")]
