@@ -9,3 +9,6 @@ yorling-core = { path = "../yorling-core" }
 yorling-engine = { path = "../yorling-engine" }
 core-foundation = "0.10"
 log = "0.4"
+libc = "0.2"
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSProcessInfo", "NSString", "NSObject"] }

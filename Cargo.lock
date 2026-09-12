@@ -6085,7 +6085,10 @@ name = "yorling-platform-macos"
 version = "0.1.2"
 dependencies = [
  "core-foundation",
+ "libc",
  "log",
+ "objc2",
+ "objc2-foundation",
  "yorling-core",
  "yorling-engine",
 ]

@@ -6,12 +6,15 @@
 use std::os::raw::c_void;
 use std::ptr;
 use std::sync::{
+    Arc, Mutex,
     atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering},
-    mpsc, Arc, Mutex,
+    mpsc,
 };
 use std::thread;
-use std::time::{Duration, Instant};
 
+use crate::mouse_motion::{
+    DisplayBounds, MouseMotionController, MouseMoveIntent, set_input_thread_priority,
+};
 use core_foundation::base::TCFType;
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::CFDictionary;
@@ -106,6 +109,8 @@ unsafe extern "C" {
         mouse_cursor_position: CGPoint,
         mouse_button: u32,
     ) -> CGEventRef;
+    fn CGGetActiveDisplayList(max_displays: u32, displays: *mut u32, count: *mut u32) -> i32;
+    fn CGDisplayBounds(display: u32) -> CGRect;
 }
 
 // Mouse event type constants
@@ -121,19 +126,49 @@ const K_CG_SCROLL_WHEEL_EVENT_DELTA_AXIS_1: u32 = 11;
 /// CGPoint for mouse position
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-struct CGPoint {
-    x: f64,
-    y: f64,
+pub(crate) struct CGPoint {
+    pub x: f64,
+    pub y: f64,
 }
 
-/// Cursor speed in pixels per second while Tab is held.
-const MOUSE_MOVE_SPEED_FAST: f64 = 1400.0;
-/// Cursor speed in pixels per second after Tab is released.
-const MOUSE_MOVE_SPEED_SLOW: f64 = 360.0;
-/// Background mouse-motion refresh cadence.
-const MOUSE_MOVE_TICK: Duration = Duration::from_micros(8_333);
-/// How quickly the smoothed velocity converges toward the target.
-const MOUSE_MOVE_RESPONSE: f64 = 18.0;
+#[repr(C)]
+struct CGSize {
+    width: f64,
+    height: f64,
+}
+
+#[repr(C)]
+struct CGRect {
+    origin: CGPoint,
+    size: CGSize,
+}
+
+pub(crate) fn get_active_display_bounds() -> Vec<DisplayBounds> {
+    let mut displays = [0_u32; 32];
+    let mut count = 0;
+    // SAFETY: buffer and count are valid, and the buffer length matches max_displays.
+    let result =
+        unsafe { CGGetActiveDisplayList(displays.len() as u32, displays.as_mut_ptr(), &mut count) };
+    if result != 0 {
+        return Vec::new();
+    }
+    displays[..(count as usize).min(displays.len())]
+        .iter()
+        .filter_map(|&id| {
+            let bounds = unsafe { CGDisplayBounds(id) };
+            if bounds.size.width < 1.0 || bounds.size.height < 1.0 {
+                return None;
+            }
+            Some(DisplayBounds {
+                min_x: bounds.origin.x,
+                min_y: bounds.origin.y,
+                max_x: bounds.origin.x + bounds.size.width - 1.0,
+                max_y: bounds.origin.y + bounds.size.height - 1.0,
+            })
+        })
+        .collect()
+}
+
 /// Lines to scroll per key event.
 const MOUSE_SCROLL_LINES: i32 = 3;
 
@@ -175,162 +210,6 @@ struct TapContext {
     /// CFMachPortRef for re-enabling the tap on timeout.
     /// Stored as AtomicPtr so the callback can access it without locking.
     tap_ref: AtomicPtr<c_void>,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct MouseMoveIntent {
-    x: i8,
-    y: i8,
-    fast: bool,
-}
-
-impl MouseMoveIntent {
-    fn is_idle(self) -> bool {
-        self.x == 0 && self.y == 0
-    }
-}
-
-#[derive(Debug, Default)]
-struct SmoothMouseMotion {
-    velocity_x: f64,
-    velocity_y: f64,
-}
-
-impl SmoothMouseMotion {
-    fn step(&mut self, intent: MouseMoveIntent, dt: Duration) -> Option<(f64, f64)> {
-        if intent.x == 0 && intent.y == 0 {
-            self.velocity_x = 0.0;
-            self.velocity_y = 0.0;
-            return None;
-        }
-
-        let dt_secs = dt.as_secs_f64();
-        if dt_secs <= f64::EPSILON {
-            return None;
-        }
-
-        let (target_vx, target_vy) = mouse_move_target_velocity(intent);
-        let blend = 1.0 - (-MOUSE_MOVE_RESPONSE * dt_secs).exp();
-        self.velocity_x += (target_vx - self.velocity_x) * blend;
-        self.velocity_y += (target_vy - self.velocity_y) * blend;
-
-        Some((self.velocity_x * dt_secs, self.velocity_y * dt_secs))
-    }
-}
-
-#[derive(Debug, Default)]
-struct CursorMotionState {
-    position: Option<CGPoint>,
-}
-
-impl CursorMotionState {
-    fn next_position(&mut self, dx: f64, dy: f64) -> CGPoint {
-        let mut position = self.position.unwrap_or_else(get_cursor_position);
-        position.x += dx;
-        position.y += dy;
-        self.position = Some(position);
-        position
-    }
-
-    fn reset(&mut self) {
-        self.position = None;
-    }
-}
-
-struct MouseMotionController {
-    intent: Arc<Mutex<MouseMoveIntent>>,
-    running: Arc<AtomicBool>,
-    worker: Mutex<Option<thread::JoinHandle<()>>>,
-}
-
-impl MouseMotionController {
-    fn new() -> Self {
-        Self {
-            intent: Arc::new(Mutex::new(MouseMoveIntent::default())),
-            running: Arc::new(AtomicBool::new(false)),
-            worker: Mutex::new(None),
-        }
-    }
-
-    fn start(&self) {
-        if self.running.swap(true, Ordering::SeqCst) {
-            return;
-        }
-
-        let intent = Arc::clone(&self.intent);
-        let running = Arc::clone(&self.running);
-        let handle = thread::spawn(move || {
-            let mut motion = SmoothMouseMotion::default();
-            let mut cursor = CursorMotionState::default();
-            let mut last_tick = Instant::now();
-            let mut next_tick = last_tick + MOUSE_MOVE_TICK;
-
-            while running.load(Ordering::SeqCst) {
-                let now = Instant::now();
-                let dt = now.saturating_duration_since(last_tick);
-                last_tick = now;
-
-                let current_intent = *intent.lock().unwrap();
-                if current_intent.is_idle() {
-                    let _ = motion.step(current_intent, dt);
-                    cursor.reset();
-                } else if let Some((dx, dy)) = motion.step(current_intent, dt) {
-                    emit_mouse_move_to(cursor.next_position(dx, dy));
-                }
-
-                let after_work = Instant::now();
-                if after_work < next_tick {
-                    thread::sleep(next_tick - after_work);
-                } else {
-                    next_tick = after_work;
-                    thread::yield_now();
-                }
-                next_tick += MOUSE_MOVE_TICK;
-            }
-        });
-
-        *self.worker.lock().unwrap() = Some(handle);
-    }
-
-    fn stop(&self) {
-        self.running.store(false, Ordering::SeqCst);
-        self.stop_motion();
-
-        let handle = self.worker.lock().unwrap().take();
-        if let Some(handle) = handle {
-            let _ = handle.join();
-        }
-    }
-
-    fn update_intent(&self, intent: MouseMoveIntent) {
-        *self.intent.lock().unwrap() = intent;
-    }
-
-    fn stop_motion(&self) {
-        self.update_intent(MouseMoveIntent::default());
-    }
-}
-
-fn mouse_move_speed_per_second(fast: bool) -> f64 {
-    if fast {
-        MOUSE_MOVE_SPEED_FAST
-    } else {
-        MOUSE_MOVE_SPEED_SLOW
-    }
-}
-
-fn mouse_move_target_velocity(intent: MouseMoveIntent) -> (f64, f64) {
-    let magnitude_sq = f64::from(intent.x.pow(2) + intent.y.pow(2));
-    if magnitude_sq <= f64::EPSILON {
-        return (0.0, 0.0);
-    }
-
-    let magnitude = magnitude_sq.sqrt();
-    let speed = mouse_move_speed_per_second(intent.fast);
-    (
-        f64::from(intent.x) / magnitude * speed,
-        f64::from(intent.y) / magnitude * speed,
-    )
 }
 
 pub struct KeyboardInterceptor {
@@ -408,6 +287,7 @@ impl KeyboardInterceptor {
         context.enabled.store(initially_enabled, Ordering::SeqCst);
 
         thread::spawn(move || {
+            set_input_thread_priority();
             unsafe {
                 let mask: u64 = (1 << K_CG_EVENT_KEY_DOWN)
                     | (1 << K_CG_EVENT_KEY_UP)
@@ -622,7 +502,7 @@ fn emit_synthetic_key(keycode: u16, key_down: bool, flags: u64) {
 }
 
 /// Get the current mouse cursor position.
-fn get_cursor_position() -> CGPoint {
+pub(crate) fn get_cursor_position() -> CGPoint {
     unsafe {
         let dummy = CGEventCreate(ptr::null());
         if dummy.is_null() {
@@ -635,7 +515,7 @@ fn get_cursor_position() -> CGPoint {
 }
 
 /// Move the mouse cursor to an absolute position.
-fn emit_mouse_move_to(position: CGPoint) {
+pub(crate) fn emit_mouse_move_to(position: CGPoint) {
     unsafe {
         let event = CGEventCreateMouseEvent(
             ptr::null(),
@@ -703,6 +583,12 @@ unsafe extern "C" fn event_tap_callback(
     // Handle tap disabled (timeout or user-input related) — re-enable it
     if event_type == K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT || event_type == 0xFFFFFFFF {
         let data = unsafe { &*(user_info as *const (Arc<TapContext>, Arc<AtomicU64>)) };
+        // Key releases may have been lost during the interruption. Never keep
+        // driving the cursor from a direction that is no longer physically held.
+        data.0.mouse_motion.stop_motion();
+        if let Ok(mut engine) = data.0.engine.lock() {
+            engine.cancel_mouse_mode();
+        }
         let tap = data.0.tap_ref.load(Ordering::SeqCst);
         if !tap.is_null() && data.0.enabled.load(Ordering::Relaxed) {
             log::warn!("CGEventTap disabled (type=0x{:X}), re-enabling", event_type);
@@ -1017,51 +903,40 @@ fn dispatch_music_key_event(context: &TapContext, code: &'static str, key_down: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     #[test]
-    fn mouse_move_speed_profiles_are_faster_than_legacy_steps() {
-        assert!(mouse_move_speed_per_second(false) > 300.0);
-        assert!(mouse_move_speed_per_second(true) > 1250.0);
-    }
-
-    #[test]
-    fn mouse_move_target_velocity_normalizes_diagonal_motion() {
-        let (vx, vy) = mouse_move_target_velocity(MouseMoveIntent {
-            x: 1,
-            y: 1,
-            fast: false,
-        });
-
-        assert!(vx > 0.0);
-        assert!(vy > 0.0);
-        assert!((vx - vy).abs() < 1e-6);
-
-        let speed = (vx * vx + vy * vy).sqrt();
-        assert!((speed - mouse_move_speed_per_second(false)).abs() < 1e-6);
-    }
-
-    #[test]
-    fn smooth_mouse_motion_accelerates_and_stops_cleanly() {
-        let mut motion = SmoothMouseMotion::default();
-        let intent = MouseMoveIntent {
-            x: 1,
-            y: 0,
-            fast: false,
-        };
-
-        let first = motion
-            .step(intent, Duration::from_millis(8))
-            .expect("initial movement");
-        let second = motion
-            .step(intent, Duration::from_millis(8))
-            .expect("continued movement");
-
-        assert!(second.0.abs() > first.0.abs());
-        assert!(second.1.abs() <= first.1.abs());
-        assert!(motion
-            .step(MouseMoveIntent::default(), Duration::from_millis(8))
-            .is_none());
+    fn event_tap_interruption_cancels_a_stale_mouse_session() {
+        for event_type in [K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT, 0xFFFFFFFF] {
+            let interceptor = KeyboardInterceptor::new();
+            {
+                let mut engine = interceptor.context.engine.lock().unwrap();
+                engine.process_key(VirtualKeyCode::Tab as u16, true, false, 0);
+                engine.process_key(VirtualKeyCode::J as u16, true, false, 0);
+                assert!(engine.is_mouse_mode_active());
+            }
+            let mut data = (
+                Arc::clone(&interceptor.context),
+                Arc::clone(&interceptor.event_count),
+            );
+            // A disabled-tap notification has no key event and our test has no
+            // native tap to enable. This never injects input into the desktop.
+            unsafe {
+                event_tap_callback(
+                    ptr::null_mut(),
+                    event_type,
+                    ptr::null_mut(),
+                    &mut data as *mut _ as *mut c_void,
+                );
+            }
+            assert!(
+                !interceptor
+                    .context
+                    .engine
+                    .lock()
+                    .unwrap()
+                    .is_mouse_mode_active()
+            );
+        }
     }
 
     #[test]
