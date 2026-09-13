@@ -9,6 +9,16 @@ src-tauri/target/
 .tmp-analysis/
 src-tauri/binaries/
 
+# Local distribution archives and installers (publish via GitHub Releases)
+/app/
+/release/
+*.app/
+*.dSYM/
+*.dmg
+*.pkg
+*.msi
+*.exe
+
 # IDE
 .vscode/
 .idea/

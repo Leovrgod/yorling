@@ -69,3 +69,7 @@ Yorling is designed for local desktop workflows. Do not commit local hook export
 ## License
 
 Yorling is licensed under the MIT License. See [LICENSE](LICENSE).
+
+For macOS keyboard-mouse timing diagnosis, run `bash scripts/diagnose-mouse-macos.sh 30` while moving with the keyboard and then a mouse/trackpad. It records aggregate mouse-event timing only; output goes to the ignored `target/diagnostics/` directory. See [the investigation notes](docs/macos-keyboard-mouse-lag.md) for interpretation and limitations.
+
+Local installers and distribution archives under `app/` and `release/` are excluded from source control. Publish distributable builds as GitHub Release assets.

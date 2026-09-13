@@ -42,7 +42,7 @@ test('release version stays in sync across package metadata', () => {
   const cargoWorkspace = readFileSync('Cargo.toml', 'utf8');
   const cargoVersion = cargoWorkspace.match(/^version = "([^"]+)"/m)?.[1];
 
-  assert.strictEqual(packageJson.version, '0.1.2');
+  assert.match(packageJson.version, /^\d+\.\d+\.\d+$/);
   assert.strictEqual(tauriConfig.version, packageJson.version);
   assert.strictEqual(cargoVersion, packageJson.version);
 });

@@ -9,6 +9,7 @@ use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSActivityOptions, NSObjectProtocol, NSProcessInfo, ns_string};
 
+use crate::display_link::{DisplayFrame, DisplayLink};
 use crate::interceptor::{
     CGPoint, emit_mouse_move_to, get_active_display_bounds, get_cursor_position,
 };
@@ -78,12 +79,22 @@ struct SmoothMouseMotion {
 }
 
 impl SmoothMouseMotion {
+    #[cfg(test)]
     fn step(&mut self, intent: MouseMoveIntent, dt: Duration) -> Option<(f64, f64)> {
+        self.step_at_refresh(intent, dt, MOUSE_MOVE_TICK)
+    }
+
+    fn step_at_refresh(
+        &mut self,
+        intent: MouseMoveIntent,
+        dt: Duration,
+        period: Duration,
+    ) -> Option<(f64, f64)> {
         if intent.is_idle() {
             *self = Self::default();
             return None;
         }
-        let dt_secs = dt.min(MAX_FRAME_TIME).as_secs_f64();
+        let dt_secs = dt.min(MAX_FRAME_TIME.max(period)).as_secs_f64();
         if dt_secs <= f64::EPSILON {
             return None;
         }
@@ -116,6 +127,7 @@ fn mouse_move_target_velocity(intent: MouseMoveIntent) -> (f64, f64) {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DisplayBounds {
+    pub id: u32,
     pub min_x: f64,
     pub min_y: f64,
     pub max_x: f64,
@@ -170,6 +182,7 @@ impl CursorMotionState {
 struct MotionRequest {
     intent: MouseMoveIntent,
     running: bool,
+    frame: Option<DisplayFrame>,
     // Preserve a stop/restart even if both happen before the next worker tick.
     generation: u64,
 }
@@ -184,9 +197,22 @@ impl MotionRequest {
 }
 
 #[derive(Default)]
-struct MotionShared {
+pub(super) struct MotionShared {
     request: Mutex<MotionRequest>,
     wake: Condvar,
+}
+
+impl MotionShared {
+    pub(super) fn publish_frame(&self, frame: DisplayFrame) {
+        // One replaceable slot, never a queue. No event posting or allocation
+        // here; input releases use the same mutex/condition variable.
+        if let Ok(mut request) = self.request.lock() {
+            if request.running && !request.intent.is_idle() {
+                request.frame = Some(frame);
+                self.wake.notify_one();
+            }
+        }
+    }
 }
 
 pub(crate) struct MouseMotionController {
@@ -249,6 +275,9 @@ impl Drop for MouseMotionController {
 trait MouseOutput {
     fn reset(&mut self);
     fn move_by(&mut self, dx: f64, dy: f64);
+    fn display_id(&self) -> Option<u32> {
+        None
+    }
 }
 
 #[derive(Default)]
@@ -260,8 +289,24 @@ struct NativeMouseOutput {
 
 impl MouseOutput for NativeMouseOutput {
     fn reset(&mut self) {
-        self.cursor = CursorMotionState::default();
-        self.displays_updated = None;
+        self.cursor = CursorMotionState {
+            position: Some(get_cursor_position()),
+        };
+        self.displays = get_active_display_bounds();
+        self.displays_updated = Some(Instant::now());
+    }
+
+    fn display_id(&self) -> Option<u32> {
+        let position = self.cursor.position?;
+        self.displays
+            .iter()
+            .find(|d| {
+                position.x >= d.min_x
+                    && position.x <= d.max_x
+                    && position.y >= d.min_y
+                    && position.y <= d.max_y
+            })
+            .map(|d| d.id)
     }
 
     fn move_by(&mut self, dx: f64, dy: f64) {
@@ -297,13 +342,30 @@ fn next_frame_deadline(previous: Instant, after_work: Instant) -> Instant {
     }
 }
 
+fn display_frame_elapsed(previous: Option<DisplayFrame>, frame: DisplayFrame) -> Duration {
+    previous
+        .map(|last| {
+            frame
+                .video_time
+                .zip(last.video_time)
+                .and_then(|(now, then)| now.checked_sub(then))
+                .filter(|dt| !dt.is_zero())
+                .unwrap_or_else(|| frame.at.saturating_duration_since(last.at))
+        })
+        .unwrap_or(frame.period)
+}
+
 fn run_mouse_worker(shared: Arc<MotionShared>, mut output: impl MouseOutput) {
     set_input_thread_priority();
     let mut activity = None;
+    let mut clock: Option<DisplayLink> = None;
     let mut motion = SmoothMouseMotion::default();
     let mut generation = None;
     let mut last_tick = Instant::now();
     let mut next_tick = last_tick;
+    let mut clock_progress = last_tick;
+    let mut clock_retry = last_tick;
+    let mut previous_frame = None;
     let mut last_stall_warning = None::<Instant>;
 
     loop {
@@ -312,10 +374,13 @@ fn run_mouse_worker(shared: Arc<MotionShared>, mut output: impl MouseOutput) {
             break;
         }
         if request.intent.is_idle() {
-            // End the activity outside the input mutex: Foundation may do IPC.
+            // Native clock/activity teardown can wait for other threads. Never
+            // hold the input mutex while invoking Foundation or CoreVideo.
             drop(request);
+            clock.take();
             activity.take();
             request = shared.request.lock().unwrap();
+            request.frame = None;
             request = shared
                 .wake
                 .wait_while(request, |r| r.running && r.intent.is_idle())
@@ -327,45 +392,94 @@ fn run_mouse_worker(shared: Arc<MotionShared>, mut output: impl MouseOutput) {
 
         let now = Instant::now();
         let restarted = generation != Some(request.generation);
-        let elapsed = now.saturating_duration_since(last_tick);
-        let stalled = elapsed > RESET_AFTER_STALL;
-        if restarted || stalled {
-            motion = SmoothMouseMotion::default();
+        if restarted {
+            generation = Some(request.generation);
+            drop(request);
+            clock.take();
             output.reset();
+            motion = SmoothMouseMotion::default();
+            previous_frame = None;
             last_tick = now - MOUSE_MOVE_TICK;
             next_tick = now;
-            generation = Some(request.generation);
-            if stalled
-                && !restarted
-                && last_stall_warning
-                    .is_none_or(|last| now.duration_since(last) >= Duration::from_secs(10))
+            clock_retry = now;
+            activity.get_or_insert_with(InputActivity::new);
+            continue;
+        }
+
+        let display = output.display_id();
+        let changed_display = clock
+            .as_ref()
+            .is_some_and(|link| Some(link.display()) != display);
+        if changed_display || (clock.is_none() && display.is_some() && now >= clock_retry) {
+            drop(request);
+            clock.take();
+            shared.request.lock().unwrap().frame = None;
+            previous_frame = None;
+            clock = display.and_then(|id| match DisplayLink::start(id, Arc::clone(&shared)) {
+                Ok(link) => Some(link),
+                Err(status) => {
+                    log::debug!("Mouse display clock unavailable ({status}); using timer fallback");
+                    None
+                }
+            });
+            clock_progress = Instant::now();
+            clock_retry = clock_progress + DISPLAY_REFRESH_INTERVAL;
+            continue;
+        }
+
+        let (elapsed, period) = if clock.is_some() {
+            if let Some(frame) = request.frame.take() {
+                clock_progress = now;
+                let elapsed = display_frame_elapsed(previous_frame, frame);
+                previous_frame = Some(frame);
+                (elapsed, frame.period)
+            } else if now.saturating_duration_since(clock_progress) >= RESET_AFTER_STALL {
+                drop(request);
+                clock.take();
+                previous_frame = None;
+                clock_retry = now + DISPLAY_REFRESH_INTERVAL;
+                next_tick = now;
+                log::debug!("Mouse display clock paused; using timer fallback until it recovers");
+                continue;
+            } else {
+                let timeout = RESET_AFTER_STALL - now.saturating_duration_since(clock_progress);
+                let _ = shared.wake.wait_timeout(request, timeout).unwrap();
+                continue;
+            }
+        } else {
+            if now < next_tick {
+                let _ = shared.wake.wait_timeout(request, next_tick - now).unwrap();
+                continue;
+            }
+            (now.saturating_duration_since(last_tick), MOUSE_MOVE_TICK)
+        };
+        let intent = request.intent;
+        drop(request);
+
+        let mut elapsed = elapsed;
+        if now.saturating_duration_since(last_tick) > RESET_AFTER_STALL {
+            motion = SmoothMouseMotion::default();
+            output.reset();
+            elapsed = period;
+            if last_stall_warning
+                .is_none_or(|last| now.duration_since(last) >= Duration::from_secs(10))
             {
                 log::warn!(
                     "Mouse motion scheduling gap: {} ms; discarded stale movement",
-                    elapsed.as_millis()
+                    now.duration_since(last_tick).as_millis()
                 );
                 last_stall_warning = Some(now);
             }
         }
-        if now < next_tick {
-            // Releases the mutex while sleeping; a key release or shutdown wakes
-            // us immediately. Direction changes retain the same frame deadline.
-            let _ = shared.wake.wait_timeout(request, next_tick - now).unwrap();
-            continue;
-        }
-        let intent = request.intent;
-        drop(request);
-
-        activity.get_or_insert_with(InputActivity::new);
-        // Beginning a system activity can take time. Discard this frame if a
-        // release, reversal or shutdown arrived while Foundation was working.
+        // Resetting screen state and starting native activities may take time.
+        // Recheck after that work, so releases/restarts never replay old intent.
         {
             let latest = shared.request.lock().unwrap();
             if !latest.running || latest.intent != intent || Some(latest.generation) != generation {
                 continue;
             }
         }
-        if let Some((dx, dy)) = motion.step(intent, now.saturating_duration_since(last_tick)) {
+        if let Some((dx, dy)) = motion.step_at_refresh(intent, elapsed, period) {
             output.move_by(dx, dy);
         }
         last_tick = now;
@@ -379,6 +493,7 @@ mod tests {
 
     fn screen(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> DisplayBounds {
         DisplayBounds {
+            id: 1,
             min_x,
             min_y,
             max_x,
@@ -507,6 +622,192 @@ mod tests {
         let final_step = motion.step(intent, MOUSE_MOVE_TICK).unwrap();
         assert!((initial.0 - final_step.0).abs() < 1e-6);
         assert!((initial.1 - final_step.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn display_timestamps_remove_worker_jitter_from_movement() {
+        let period = Duration::from_secs_f64(1.0 / 75.0);
+        let now = Instant::now();
+        let previous = DisplayFrame {
+            at: now,
+            period,
+            video_time: Some(Duration::from_secs(1)),
+        };
+        let late = DisplayFrame {
+            at: now + period + Duration::from_millis(4),
+            period,
+            video_time: Some(Duration::from_secs(1) + period),
+        };
+        assert_eq!(display_frame_elapsed(Some(previous), late), period);
+        let discontinuity = DisplayFrame {
+            video_time: Some(Duration::ZERO),
+            ..late
+        };
+        assert_eq!(
+            display_frame_elapsed(Some(previous), discontinuity),
+            period + Duration::from_millis(4)
+        );
+    }
+
+    #[test]
+    fn low_refresh_displays_keep_configured_speed_and_bound_missed_frames() {
+        let intent = MouseMoveIntent {
+            x: 1,
+            y: 0,
+            fast: true,
+        };
+        for rate in [30.0, 59.94, 60.0, 75.0, 120.0, 144.0, 240.0] {
+            let period = Duration::from_secs_f64(1.0 / rate);
+            let mut motion = SmoothMouseMotion::default();
+            for _ in 0..1000 {
+                motion.step_at_refresh(intent, period, period);
+            }
+            let (dx, _) = motion.step_at_refresh(intent, period, period).unwrap();
+            assert!(
+                (dx / period.as_secs_f64() - MOUSE_MOVE_SPEED_FAST).abs() < 0.001,
+                "{rate} Hz changed speed"
+            );
+            let (late, _) = motion
+                .step_at_refresh(intent, Duration::from_secs(2), period)
+                .unwrap();
+            assert!(late <= MOUSE_MOVE_SPEED_FAST * MAX_FRAME_TIME.max(period).as_secs_f64());
+        }
+    }
+
+    #[test]
+    fn display_frames_replace_pending_work_and_stop_publishing_when_idle() {
+        let shared = MotionShared::default();
+        {
+            let mut r = shared.request.lock().unwrap();
+            r.running = true;
+            r.update(MouseMoveIntent {
+                x: 1,
+                y: 0,
+                fast: false,
+            });
+        }
+        let now = Instant::now();
+        for i in 1..1000 {
+            shared.publish_frame(DisplayFrame {
+                at: now + MOUSE_MOVE_TICK * i,
+                period: MOUSE_MOVE_TICK,
+                video_time: Some(MOUSE_MOVE_TICK * i),
+            });
+        }
+        let mut r = shared.request.lock().unwrap();
+        assert_eq!(r.frame.take().unwrap().at, now + MOUSE_MOVE_TICK * 999);
+        assert!(r.frame.is_none(), "old frames must never form a backlog");
+        r.update(MouseMoveIntent::default());
+        drop(r);
+        shared.publish_frame(DisplayFrame {
+            at: now,
+            period: MOUSE_MOVE_TICK,
+            video_time: None,
+        });
+        assert!(shared.request.lock().unwrap().frame.is_none());
+    }
+
+    #[test]
+    fn matching_display_frames_avoids_uneven_visible_steps_at_75_hz() {
+        // Sample steady cursor positions at each display refresh. This models
+        // cadence only, not real WindowServer latency or dropped display frames.
+        let visible_steps = |event_hz: f64| {
+            (1..=75)
+                .map(|frame| {
+                    let sample = |n: i32| {
+                        ((f64::from(n) / 75.0 * event_hz) + 1e-6).floor() / event_hz * 1400.0
+                    };
+                    sample(frame) - sample(frame - 1)
+                })
+                .collect::<Vec<_>>()
+        };
+        let spread = |steps: Vec<f64>| {
+            steps.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
+                - steps.iter().cloned().fold(f64::INFINITY, f64::min)
+        };
+        assert!(spread(visible_steps(120.0)) > 11.0);
+        assert!(spread(visible_steps(75.0)) < 1e-8);
+    }
+
+    #[test]
+    #[ignore = "requires a logged-in macOS display; emits no desktop input"]
+    fn native_display_clock_paces_output_and_releases_across_restarts() {
+        struct Capture {
+            tx: std::sync::mpsc::Sender<Instant>,
+            display: Option<u32>,
+        }
+        impl MouseOutput for Capture {
+            fn reset(&mut self) {}
+            fn move_by(&mut self, _: f64, _: f64) {
+                let _ = self.tx.send(Instant::now());
+            }
+            fn display_id(&self) -> Option<u32> {
+                self.display
+            }
+        }
+        let display = get_active_display_bounds()
+            .first()
+            .expect("active display")
+            .id;
+        let controller = MouseMotionController::new();
+        let expected_period = DisplayLink::start(display, Arc::clone(&controller.shared))
+            .expect("native display link")
+            .nominal_period()
+            .expect("known refresh rate");
+        for (label, display) in [
+            ("timer baseline", None),
+            ("display clock", Some(display)),
+            ("display clock restarted", Some(display)),
+        ] {
+            let (tx, rx) = std::sync::mpsc::channel();
+            controller.start_with_output(Capture { tx, display });
+            controller.update_intent(MouseMoveIntent {
+                x: 1,
+                y: 0,
+                fast: true,
+            });
+            let mut instants = Vec::new();
+            for _ in 0..150 {
+                instants.push(
+                    rx.recv_timeout(Duration::from_secs(2))
+                        .expect("clock must produce output"),
+                );
+            }
+            controller.stop_motion();
+            // Wait until the worker acknowledges idle (including native teardown).
+            thread::sleep(Duration::from_millis(100));
+            while rx.try_recv().is_ok() {}
+            assert!(
+                rx.recv_timeout(Duration::from_millis(100)).is_err(),
+                "idle output"
+            );
+            controller.stop();
+            assert_eq!(
+                Arc::strong_count(&controller.shared),
+                1,
+                "callback must release its shared state"
+            );
+            let mut intervals: Vec<_> = instants[20..]
+                .windows(2)
+                .map(|pair| pair[1].duration_since(pair[0]).as_secs_f64() * 1000.0)
+                .collect();
+            let mean = intervals.iter().sum::<f64>() / intervals.len() as f64;
+            if display.is_some() {
+                let expected = expected_period.as_secs_f64() * 1000.0;
+                assert!(
+                    (mean - expected).abs() < expected * 0.25,
+                    "native output {mean:.3} ms does not track display {expected:.3} ms"
+                );
+            }
+            intervals.sort_by(f64::total_cmp);
+            eprintln!(
+                "{label}: intervals={} median={:.3} ms p95={:.3} ms max={:.3} ms",
+                intervals.len(),
+                intervals[intervals.len() / 2],
+                intervals[intervals.len() * 95 / 100],
+                intervals.last().unwrap()
+            );
+        }
     }
 
     struct TestMouseOutput(std::sync::mpsc::Sender<Option<(f64, f64)>>);

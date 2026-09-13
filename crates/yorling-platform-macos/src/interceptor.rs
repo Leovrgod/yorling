@@ -160,6 +160,7 @@ pub(crate) fn get_active_display_bounds() -> Vec<DisplayBounds> {
                 return None;
             }
             Some(DisplayBounds {
+                id,
                 min_x: bounds.origin.x,
                 min_y: bounds.origin.y,
                 max_x: bounds.origin.x + bounds.size.width - 1.0,
