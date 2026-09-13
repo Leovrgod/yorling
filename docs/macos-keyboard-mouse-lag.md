@@ -86,4 +86,6 @@ bash scripts/diagnose-mouse-macos.sh 30
 RUST_LOG=yorling_platform_macos=debug ./target/release/bundle/macos/Yorling.app/Contents/MacOS/yorling 2> yorling-input.log
 ```
 
-`Mouse frame clock` 显示当前屏幕和刷新率；`Mouse display clock paused/unavailable` 表示使用了定时器退路；`Mouse motion scheduling gap` 表示活动期间出现超过 100 ms 的工作间隔（最多每 10 秒一条）；`CGEventTap disabled` 表示键盘监听被系统暂停。这些日志不包含按键内容。不要仅凭没有日志就排除较短的掉帧，也不要直接归因于内存泄漏。
+`Mouse frame clock` 显示当前屏幕和刷新率；`Mouse display clock paused/unavailable` 表示使用了定时器退路；`Mouse motion scheduling gap` 表示活动期间出现超过 100 ms 的工作间隔（最多每 10 秒一条）；`CGEventTap interrupted`（旧版为 `CGEventTap disabled`）表示键盘监听被系统暂停。这些日志不包含按键内容。不要仅凭没有日志就排除较短的掉帧，也不要直接归因于内存泄漏。
+
+0.1.4 对截图快捷键、输入事件顺序和中断恢复的后续排查见[键盘快捷键记录](macos-keyboard-shortcuts.md)。

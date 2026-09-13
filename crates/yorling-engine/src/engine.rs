@@ -202,7 +202,7 @@ pub struct MappingEngine {
     ctrl_to_cmd_keys: HashSet<u16>,
     /// Currently held Ctrl→Cmd remapped keys, for correct key-up handling
     /// even when Ctrl is released before the letter key.
-    ctrl_to_cmd_held: HashSet<u16>,
+    ctrl_to_cmd_held: HashMap<u16, u64>,
     /// Currently held Win+Shift+S remap source keys so key-up can still emit
     /// Cmd+Shift+4 even if Command/Shift are released first.
     win_shift_screenshot_held: HashSet<u16>,
@@ -600,7 +600,7 @@ impl MappingEngine {
             replayed_keys: HashMap::new(),
             suppressed_releases: HashSet::new(),
             ctrl_to_cmd_keys,
-            ctrl_to_cmd_held: HashSet::new(),
+            ctrl_to_cmd_held: HashMap::new(),
             win_shift_screenshot_held: HashSet::new(),
             mac_compatibility_shortcuts_enabled: !is_windows,
             alt_tab_shortcut_enabled: !is_windows,
@@ -620,21 +620,47 @@ impl MappingEngine {
     /// to release stuck remapped keys (e.g. when disabling mid-hold).
     pub fn set_enabled(&mut self, enabled: bool) -> Vec<SyntheticKey> {
         self.enabled = enabled;
-        if !enabled {
-            self.hold_state = HoldState::Idle;
-            self.alt_tab_active = false;
-            self.bracket_mode = BracketModeState::Inactive;
-            self.mouse_mode = MouseModeState::Inactive;
-            self.mouse_held_keys.clear();
-            self.tab_held_in_mouse_mode = false;
-            self.suppressed_releases.clear();
-            self.win_shift_screenshot_held.clear();
-            let mut releases = self.drain_held_keys();
-            releases.extend(self.drain_replayed_keys());
-            releases
-        } else {
+        if enabled {
             Vec::new()
+        } else {
+            self.reset_input_state()
         }
+    }
+
+    /// Recover after lost input (event-tap interruption, device/session changes,
+    /// or disabling). Keep configuration/enabled state, release every mapped key,
+    /// and discard pending layers so normal typing cannot inherit stale state.
+    pub fn reset_input_state(&mut self) -> Vec<SyntheticKey> {
+        self.hold_state = HoldState::Idle;
+        self.alt_tab_active = false;
+        self.bracket_mode = BracketModeState::Inactive;
+        self.mouse_mode = MouseModeState::Inactive;
+        self.mouse_held_keys.clear();
+        self.tab_held_in_mouse_mode = false;
+        self.suppressed_releases.clear();
+        let mut releases = self.drain_held_keys();
+        releases.extend(self.drain_replayed_keys());
+        releases.extend(
+            self.ctrl_to_cmd_held
+                .drain()
+                .map(|(keycode, extra_flags)| SyntheticKey {
+                    keycode,
+                    key_down: false,
+                    preserve_flags: false,
+                    extra_flags,
+                }),
+        );
+        releases.extend(
+            self.win_shift_screenshot_held
+                .drain()
+                .map(|_| SyntheticKey {
+                    keycode: VirtualKeyCode::Key4 as u16,
+                    key_down: false,
+                    preserve_flags: false,
+                    extra_flags: keycode::FLAG_COMMAND | keycode::FLAG_SHIFT,
+                }),
+        );
+        releases
     }
 
     pub fn cancel_alt_tab_session(&mut self) {
@@ -1436,7 +1462,7 @@ impl MappingEngine {
             }
             let new_flags = (flags & !keycode::FLAG_CONTROL) | keycode::FLAG_COMMAND;
             if key_down {
-                self.ctrl_to_cmd_held.insert(keycode);
+                self.ctrl_to_cmd_held.insert(keycode, new_flags);
                 // If a hold modifier is pending, the user clearly intended a Ctrl shortcut,
                 // not a layer action. Transition to AwaitModifierRelease to suppress the
                 // orphaned modifier release.
@@ -1464,7 +1490,7 @@ impl MappingEngine {
         // Handle key-up for Ctrl→Cmd remapped keys when Ctrl was released first.
         // The key-up arrives without FLAG_CONTROL, so the check above won't catch it.
         // Preserve any other modifiers (Shift, Option) that may still be held.
-        if !key_down && self.ctrl_to_cmd_held.remove(&keycode) {
+        if !key_down && self.ctrl_to_cmd_held.remove(&keycode).is_some() {
             let new_flags = (flags & !keycode::FLAG_CONTROL) | keycode::FLAG_COMMAND;
             return EngineAction::Emit(vec![SyntheticKey {
                 keycode,
@@ -1652,6 +1678,123 @@ impl Default for MappingEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabling_releases_compatibility_shortcuts_and_forgets_their_sources() {
+        let mut engine = MappingEngine::new();
+        let c = VirtualKeyCode::C as u16;
+        let s = VirtualKeyCode::S as u16;
+        let flags = keycode::FLAG_COMMAND | keycode::FLAG_SHIFT;
+        engine.process_key(c, true, false, keycode::FLAG_CONTROL | keycode::FLAG_SHIFT);
+        engine.process_key(s, true, false, flags);
+        let mut releases = engine.set_enabled(false);
+        releases.sort_by_key(|key| key.keycode);
+        assert_eq!(
+            releases.len(),
+            2,
+            "both remapped keys need a matching release"
+        );
+        assert!(
+            releases
+                .iter()
+                .all(|key| !key.key_down && key.extra_flags == flags)
+        );
+        assert!(releases.iter().any(|key| key.keycode == c));
+        assert!(
+            releases
+                .iter()
+                .any(|key| key.keycode == VirtualKeyCode::Key4 as u16)
+        );
+        engine.set_enabled(true);
+        assert!(matches!(
+            engine.process_key(c, false, false, 0),
+            EngineAction::PassThrough
+        ));
+        assert!(matches!(
+            engine.process_key(s, false, false, 0),
+            EngineAction::PassThrough
+        ));
+    }
+
+    #[test]
+    fn screenshot_shortcut_pairs_releases_after_modifiers_and_passes_native_shortcut() {
+        let mut engine = MappingEngine::new();
+        let flags = keycode::FLAG_COMMAND | keycode::FLAG_SHIFT;
+        let s = VirtualKeyCode::S as u16;
+        let check = |action: EngineAction, down: bool| match action {
+            EngineAction::Emit(keys) => {
+                assert_eq!(keys.len(), 1);
+                assert_eq!(keys[0].keycode, VirtualKeyCode::Key4 as u16);
+                assert_eq!(keys[0].key_down, down);
+                assert_eq!(keys[0].extra_flags, flags);
+            }
+            _ => panic!("missing screenshot mapping"),
+        };
+        check(engine.process_key(s, true, false, flags), true);
+        assert!(matches!(
+            engine.process_key(s, true, true, flags),
+            EngineAction::Suppress
+        ));
+        engine.process_key(
+            VirtualKeyCode::Command as u16,
+            false,
+            false,
+            keycode::FLAG_SHIFT,
+        );
+        engine.process_key(VirtualKeyCode::Shift as u16, false, false, 0);
+        check(engine.process_key(s, false, false, 0), false);
+        for down in [true, false] {
+            assert!(matches!(
+                engine.process_key(VirtualKeyCode::Key4 as u16, down, false, flags),
+                EngineAction::PassThrough
+            ));
+        }
+        let mut windows = MappingEngine::new_for_platform(MappingPlatform::Windows);
+        assert!(matches!(
+            windows.process_key(s, true, false, flags),
+            EngineAction::PassThrough
+        ));
+    }
+
+    #[test]
+    fn interruption_releases_layers_and_cancels_pending_modes_without_disabling() {
+        let mut engine = MappingEngine::new();
+        engine.process_key(VirtualKeyCode::Space as u16, true, false, 0);
+        engine.process_key(VirtualKeyCode::J as u16, true, false, 0);
+        let releases = engine.reset_input_state();
+        assert_eq!(releases.len(), 1);
+        assert_eq!(releases[0].keycode, VirtualKeyCode::LeftArrow as u16);
+        assert!(!releases[0].key_down);
+        assert!(engine.is_enabled());
+        assert!(matches!(
+            engine.process_key(VirtualKeyCode::J as u16, true, false, 0),
+            EngineAction::PassThrough
+        ));
+        engine.process_key(VirtualKeyCode::Tab as u16, true, false, 0);
+        engine.process_key(VirtualKeyCode::I as u16, true, false, 0);
+        assert!(engine.is_mouse_mode_active());
+        engine.reset_input_state();
+        assert!(!engine.is_mouse_mode_active());
+        engine.process_key(VirtualKeyCode::Semicolon as u16, true, false, 0);
+        engine.process_key(VirtualKeyCode::Semicolon as u16, false, false, 0);
+        engine.reset_input_state();
+        assert!(matches!(
+            engine.process_key(VirtualKeyCode::A as u16, true, false, 0),
+            EngineAction::PassThrough
+        ));
+        engine.process_key(
+            VirtualKeyCode::Tab as u16,
+            true,
+            false,
+            keycode::FLAG_OPTION,
+        );
+        engine.reset_input_state();
+        assert!(matches!(
+            engine.process_key(VirtualKeyCode::Option as u16, false, false, 0),
+            EngineAction::PassThrough
+        ));
+        assert!(engine.reset_input_state().is_empty());
+    }
 
     fn space() -> u16 {
         VirtualKeyCode::Space as u16
