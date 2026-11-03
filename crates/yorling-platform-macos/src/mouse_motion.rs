@@ -14,7 +14,7 @@ use crate::interceptor::{
     CGPoint, emit_mouse_move_to, get_active_display_bounds, get_cursor_position,
 };
 
-const MOUSE_MOVE_SPEED_FAST: f64 = 1400.0;
+const MOUSE_MOVE_SPEED_FAST: f64 = 2100.0;
 const MOUSE_MOVE_SPEED_SLOW: f64 = 360.0;
 const MOUSE_MOVE_TICK: Duration = Duration::from_micros(8_333);
 const MOUSE_MOVE_RESPONSE: f64 = 18.0;
@@ -715,7 +715,8 @@ mod tests {
             (1..=75)
                 .map(|frame| {
                     let sample = |n: i32| {
-                        ((f64::from(n) / 75.0 * event_hz) + 1e-6).floor() / event_hz * 1400.0
+                        ((f64::from(n) / 75.0 * event_hz) + 1e-6).floor() / event_hz
+                            * MOUSE_MOVE_SPEED_FAST
                     };
                     sample(frame) - sample(frame - 1)
                 })
@@ -930,6 +931,9 @@ mod tests {
             motion.step(intent, MOUSE_MOVE_TICK);
         }
         let (dx, _) = motion.step(intent, Duration::from_secs(2)).unwrap();
-        assert!(dx <= 1400.0 / 60.0, "one late tick jumped {dx} pixels");
+        assert!(
+            dx <= MOUSE_MOVE_SPEED_FAST / 60.0,
+            "one late tick jumped {dx} pixels"
+        );
     }
 }
