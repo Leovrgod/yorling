@@ -1219,8 +1219,8 @@ impl MappingEngine {
                     return MouseModeResult::Handled(EngineAction::Suppress);
                 }
 
-                // N/M → one click per press; keeping the mode active allows
-                // repeated taps (for example, a double-click with N).
+                // N/M → one click per press. N keeps the mode only while Tab
+                // is physically held, allowing repeated taps such as a double-click.
                 if let Some(button) = Self::mouse_click_button_for_key(keycode) {
                     if !key_down {
                         self.mouse_held_keys.remove(&keycode);
@@ -1228,6 +1228,9 @@ impl MappingEngine {
                     }
                     if is_autorepeat || !self.mouse_held_keys.insert(keycode) {
                         return MouseModeResult::Handled(EngineAction::Suppress);
+                    }
+                    if button == MouseButton::Left && !self.tab_held_in_mouse_mode {
+                        self.exit_mouse_mode();
                     }
                     return MouseModeResult::Handled(EngineAction::System(
                         SystemAction::MouseClick { button },
@@ -4167,24 +4170,32 @@ mod tests {
     }
 
     #[test]
-    fn mouse_mode_tab_release_after_active_suppressed() {
+    fn mouse_mode_n_after_tab_release_clicks_and_exits() {
         let mut engine = MappingEngine::new();
         engine.set_enabled(true);
 
         // Tab↓ → Pending
         engine.process_key(tab(), true, false, 0);
-        // J↓ → Active (Tab added to suppressed_releases)
+        // J↓ → Active while Tab remains held.
         engine.process_key(j(), true, false, 0);
         // Release J
         engine.process_key(j(), false, false, 0);
-
-        // Now exit mouse mode by pressing D
-        engine.process_key(d(), true, false, 0);
-        assert_eq!(engine.mouse_mode, MouseModeState::Inactive);
-
-        // Tab↑ should be suppressed (was added to suppressed_releases)
+        // Tab↑ → mode remains active, but Tab is no longer physically held.
         assert!(matches!(
             engine.process_key(tab(), false, false, 0),
+            EngineAction::Suppress
+        ));
+
+        // N↓ → left-click and exit as in the original single-click behavior.
+        assert_system(
+            &engine.process_key(n(), true, false, 0),
+            SystemAction::MouseClick {
+                button: MouseButton::Left,
+            },
+        );
+        assert_eq!(engine.mouse_mode, MouseModeState::Inactive);
+        assert!(matches!(
+            engine.process_key(n(), false, false, 0),
             EngineAction::Suppress
         ));
     }

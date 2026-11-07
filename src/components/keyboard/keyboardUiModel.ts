@@ -88,8 +88,8 @@ function getLayerConfigs(language: AppLanguageId, platform: YorlingPlatform): La
         title: 'Mouse Layer',
         description: 'Hold Tab for mouse control: JKLI move, U/O scroll, R back, C toggles sidebar, N/M click.',
         tips: isWindows
-          ? ['Movement is faster while Tab is held', 'Movement slows after release', 'R sends the mouse back button', 'C sends Ctrl+B for editor sidebars', 'N left-clicks and keeps the mode; tap again to click again', 'M right-clicks and keeps the mode']
-          : ['Movement is faster while Tab is held', 'Movement slows after release', 'R sends the mouse back button', 'C sends Cmd+[ to toggle sidebars', 'N left-clicks and keeps the mode; tap again to click again', 'M right-clicks and keeps the mode'],
+          ? ['Movement is faster while Tab is held', 'Movement slows after release', 'R sends the mouse back button', 'C sends Ctrl+B for editor sidebars', 'Hold Tab to tap N repeatedly without exiting; after Tab is released, N clicks and exits', 'M right-clicks and keeps the mode']
+          : ['Movement is faster while Tab is held', 'Movement slows after release', 'R sends the mouse back button', 'C sends Cmd+[ to toggle sidebars', 'Hold Tab to tap N repeatedly without exiting; after Tab is released, N clicks and exits', 'M right-clicks and keeps the mode'],
       },
     ];
   }
@@ -134,8 +134,8 @@ function getLayerConfigs(language: AppLanguageId, platform: YorlingPlatform): La
       title: '鼠标层',
       description: '按住 Tab 进入鼠标控制：JKLI 移动、U/O 滚动、R 后退、C 开关侧边栏、N/M 点击。',
       tips: isWindows
-        ? ['按住 Tab 时移动更快', '松开 Tab 仍保留方向，但速度会变慢', 'R 发送鼠标后退键', 'C 发送 Ctrl+B 适配编辑器侧边栏', 'N 左键后保持鼠标层，可再次按 N 连点', 'M 右键后也保持鼠标层']
-        : ['按住 Tab 时移动更快', '松开 Tab 仍保留方向，但速度会变慢', 'R 发送鼠标后退键', 'C 发送 Cmd+[ 开关侧边栏', 'N 左键后保持鼠标层，可再次按 N 连点', 'M 右键后也保持鼠标层'],
+        ? ['按住 Tab 时移动更快', '松开 Tab 仍保留方向，但速度会变慢', 'R 发送鼠标后退键', 'C 发送 Ctrl+B 适配编辑器侧边栏', '按住 Tab 时可再次按 N 连点且不退出；松开 Tab 后按 N 会点击并退出', 'M 右键后也保持鼠标层']
+        : ['按住 Tab 时移动更快', '松开 Tab 仍保留方向，但速度会变慢', 'R 发送鼠标后退键', 'C 发送 Cmd+[ 开关侧边栏', '按住 Tab 时可再次按 N 连点且不退出；松开 Tab 后按 N 会点击并退出', 'M 右键后也保持鼠标层'],
     },
   ];
 }
