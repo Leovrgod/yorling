@@ -965,6 +965,14 @@ impl MappingEngine {
         }
     }
 
+    fn mouse_click_button_for_key(keycode: u16) -> Option<MouseButton> {
+        match VirtualKeyCode::from_raw(keycode) {
+            Some(VirtualKeyCode::N) => Some(MouseButton::Left),
+            Some(VirtualKeyCode::M) => Some(MouseButton::Right),
+            _ => None,
+        }
+    }
+
     fn shortcut_action(target_keycode: u16, extra_flags: u64) -> EngineAction {
         EngineAction::Emit(vec![
             SyntheticKey {
@@ -1061,16 +1069,13 @@ impl MappingEngine {
                     ));
                 }
 
-                // N → enter mouse mode, click, then exit without leaking Tab/N key-up.
-                if matches!(VirtualKeyCode::from_raw(keycode), Some(VirtualKeyCode::N)) {
+                // N/M → enter and stay in mouse mode while clicking.
+                if let Some(button) = Self::mouse_click_button_for_key(keycode) {
                     self.mouse_mode = MouseModeState::Active;
                     self.tab_held_in_mouse_mode = true;
                     self.mouse_held_keys.insert(keycode);
-                    self.exit_mouse_mode();
                     return MouseModeResult::Handled(EngineAction::System(
-                        SystemAction::MouseClick {
-                            button: MouseButton::Left,
-                        },
+                        SystemAction::MouseClick { button },
                     ));
                 }
 
@@ -1092,18 +1097,6 @@ impl MappingEngine {
                     return MouseModeResult::Handled(Self::shortcut_action(
                         self.mouse_sidebar_shortcut_keycode,
                         self.mouse_sidebar_shortcut_flags,
-                    ));
-                }
-
-                // M → enter mouse mode and right-click immediately.
-                if matches!(VirtualKeyCode::from_raw(keycode), Some(VirtualKeyCode::M)) {
-                    self.mouse_mode = MouseModeState::Active;
-                    self.tab_held_in_mouse_mode = true;
-                    self.mouse_held_keys.insert(keycode);
-                    return MouseModeResult::Handled(EngineAction::System(
-                        SystemAction::MouseClick {
-                            button: MouseButton::Right,
-                        },
                     ));
                 }
 
@@ -1226,34 +1219,19 @@ impl MappingEngine {
                     return MouseModeResult::Handled(EngineAction::Suppress);
                 }
 
-                // M → right mouse click (stays in mouse mode)
-                if matches!(VirtualKeyCode::from_raw(keycode), Some(VirtualKeyCode::M)) {
-                    if key_down && !is_autorepeat {
-                        self.mouse_held_keys.insert(keycode);
-                        return MouseModeResult::Handled(EngineAction::System(
-                            SystemAction::MouseClick {
-                                button: MouseButton::Right,
-                            },
-                        ));
-                    } else if !key_down {
+                // N/M → one click per press; keeping the mode active allows
+                // repeated taps (for example, a double-click with N).
+                if let Some(button) = Self::mouse_click_button_for_key(keycode) {
+                    if !key_down {
                         self.mouse_held_keys.remove(&keycode);
+                        return MouseModeResult::Handled(EngineAction::Suppress);
                     }
-                    return MouseModeResult::Handled(EngineAction::Suppress);
-                }
-
-                // N → left mouse click AND exit mouse mode
-                if matches!(VirtualKeyCode::from_raw(keycode), Some(VirtualKeyCode::N)) {
-                    if key_down && !is_autorepeat {
-                        self.mouse_held_keys.insert(keycode);
-                        self.exit_mouse_mode();
-                        return MouseModeResult::Handled(EngineAction::System(
-                            SystemAction::MouseClick {
-                                button: MouseButton::Left,
-                            },
-                        ));
+                    if is_autorepeat || !self.mouse_held_keys.insert(keycode) {
+                        return MouseModeResult::Handled(EngineAction::Suppress);
                     }
-                    // N key_up or autorepeat after exit: suppress
-                    return MouseModeResult::Handled(EngineAction::Suppress);
+                    return MouseModeResult::Handled(EngineAction::System(
+                        SystemAction::MouseClick { button },
+                    ));
                 }
 
                 // Any other key → exit mouse mode, reprocess key
@@ -3626,7 +3604,7 @@ mod tests {
     }
 
     #[test]
-    fn mouse_mode_tab_then_n_clicks_left_without_leaking_tab() {
+    fn mouse_mode_tab_then_n_clicks_left_and_stays_active_for_repeated_taps() {
         let mut engine = MappingEngine::new();
         engine.set_enabled(true);
 
@@ -3638,16 +3616,29 @@ mod tests {
                 button: MouseButton::Left,
             },
         );
-        assert_eq!(engine.mouse_mode, MouseModeState::Inactive);
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
 
         assert!(matches!(
             engine.process_key(n(), false, false, 0),
             EngineAction::Suppress
         ));
+
+        assert_system(
+            &engine.process_key(n(), true, false, 0),
+            SystemAction::MouseClick {
+                button: MouseButton::Left,
+            },
+        );
+        assert!(matches!(
+            engine.process_key(n(), false, false, 0),
+            EngineAction::Suppress
+        ));
+
         assert!(matches!(
             engine.process_key(tab(), false, false, 0),
             EngineAction::Suppress
         ));
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
     }
 
     #[test]
@@ -3923,7 +3914,7 @@ mod tests {
     }
 
     #[test]
-    fn mouse_mode_active_n_clicks_left_and_exits() {
+    fn mouse_mode_active_n_clicks_left_and_stays_active() {
         let mut engine = MappingEngine::new();
         engine.set_enabled(true);
 
@@ -3931,20 +3922,26 @@ mod tests {
         engine.process_key(tab(), true, false, 0);
         engine.process_key(j(), true, false, 0);
 
-        // N↓ → MouseClick Left AND exit mouse mode
+        // N↓ → MouseClick Left, keeping mouse mode active
         assert_system(
             &engine.process_key(n(), true, false, 0),
             SystemAction::MouseClick {
                 button: MouseButton::Left,
             },
         );
-        assert_eq!(engine.mouse_mode, MouseModeState::Inactive);
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
 
-        // N↑ should be suppressed (was moved to suppressed_releases on exit)
+        // N↑ is suppressed, and a fresh tap can click again.
         assert!(matches!(
             engine.process_key(n(), false, false, 0),
             EngineAction::Suppress
         ));
+        assert_system(
+            &engine.process_key(n(), true, false, 0),
+            SystemAction::MouseClick {
+                button: MouseButton::Left,
+            },
+        );
     }
 
     #[test]
@@ -4031,7 +4028,7 @@ mod tests {
     }
 
     #[test]
-    fn mouse_mode_n_exits_and_suppresses_key_up() {
+    fn mouse_mode_n_keeps_mode_active_and_releases_held_movement() {
         let mut engine = MappingEngine::new();
         engine.set_enabled(true);
 
@@ -4039,21 +4036,25 @@ mod tests {
         engine.process_key(tab(), true, false, 0);
         engine.process_key(j(), true, false, 0);
 
-        // N↓ → click and exit
+        // N↓ → click without exiting
         engine.process_key(n(), true, false, 0);
-        assert_eq!(engine.mouse_mode, MouseModeState::Inactive);
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
 
-        // N↑ should be suppressed (was moved to suppressed_releases on exit)
+        // N↑ is suppressed but doesn't end the mode.
         assert!(matches!(
             engine.process_key(n(), false, false, 0),
             EngineAction::Suppress
         ));
 
-        // J↑ should also be suppressed (was in mouse_held_keys when exit happened)
-        assert!(matches!(
-            engine.process_key(j(), false, false, 0),
-            EngineAction::Suppress
-        ));
+        // J↑ updates the movement vector normally after the click.
+        assert_system(
+            &engine.process_key(j(), false, false, 0),
+            SystemAction::MouseMove {
+                x: 0,
+                y: 0,
+                fast: true,
+            },
+        );
     }
 
     #[test]
@@ -4290,7 +4291,7 @@ mod tests {
     }
 
     #[test]
-    fn mouse_mode_n_autorepeat_suppressed_after_exit() {
+    fn mouse_mode_n_autorepeat_is_suppressed_while_mode_stays_active() {
         let mut engine = MappingEngine::new();
         engine.set_enabled(true);
 
@@ -4298,21 +4299,32 @@ mod tests {
         engine.process_key(tab(), true, false, 0);
         engine.process_key(j(), true, false, 0);
 
-        // N↓ → click and exit
-        engine.process_key(n(), true, false, 0);
-        assert_eq!(engine.mouse_mode, MouseModeState::Inactive);
+        // N↓ → click and stay in mouse mode
+        assert_system(
+            &engine.process_key(n(), true, false, 0),
+            SystemAction::MouseClick {
+                button: MouseButton::Left,
+            },
+        );
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
 
-        // N autorepeat after exit → suppressed (don't type 'n')
+        // N autorepeat is suppressed to avoid repeated clicks while holding N.
         assert!(matches!(
             engine.process_key(n(), true, true, 0),
             EngineAction::Suppress
         ));
 
-        // N↑ → suppressed
+        // N↑ releases the key, so another discrete press clicks again.
         assert!(matches!(
             engine.process_key(n(), false, false, 0),
             EngineAction::Suppress
         ));
+        assert_system(
+            &engine.process_key(n(), true, false, 0),
+            SystemAction::MouseClick {
+                button: MouseButton::Left,
+            },
+        );
     }
 
     #[test]
