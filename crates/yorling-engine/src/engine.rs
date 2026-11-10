@@ -223,6 +223,9 @@ pub struct MappingEngine {
     mouse_held_keys: HashSet<u16>,
     /// Whether Tab is physically held while in Active mouse mode (for fast movement).
     tab_held_in_mouse_mode: bool,
+    /// Space-layer selection: F is held as a Shift modifier so navigation keys
+    /// extend the text selection at the caret instead of just moving it.
+    space_select_active: bool,
     enabled: bool,
     event_count: u64,
 }
@@ -617,6 +620,7 @@ impl MappingEngine {
             mouse_mode: MouseModeState::Inactive,
             mouse_held_keys: HashSet::new(),
             tab_held_in_mouse_mode: false,
+            space_select_active: false,
             enabled: true,
             event_count: 0,
         }
@@ -643,6 +647,7 @@ impl MappingEngine {
         self.mouse_mode = MouseModeState::Inactive;
         self.mouse_held_keys.clear();
         self.tab_held_in_mouse_mode = false;
+        self.space_select_active = false;
         self.suppressed_releases.clear();
         let mut releases = self.drain_held_keys();
         releases.extend(self.drain_replayed_keys());
@@ -1362,9 +1367,17 @@ impl MappingEngine {
         match mapping {
             KeyMapping::Single {
                 target_keycode,
-                extra_flags,
+                mut extra_flags,
                 preserve_flags,
             } => {
+                // Space + F turns navigation keys into Shift+arrow selection so the
+                // caret extends a text selection instead of just moving.
+                if preserve_flags
+                    && modifier_keycode == VirtualKeyCode::Space as u16
+                    && self.space_select_active
+                {
+                    extra_flags |= keycode::FLAG_SHIFT;
+                }
                 self.held_keys.insert(
                     source_keycode,
                     HeldKeyInfo::Single {
@@ -1546,6 +1559,33 @@ impl MappingEngine {
             }
         }
 
+        // ── Space-layer selection: F held acts as a Shift modifier for navigation ──
+        let space_keycode = VirtualKeyCode::Space as u16;
+        let f_keycode = VirtualKeyCode::F as u16;
+        if keycode == f_keycode && self.space_select_active {
+            if key_down {
+                // F autorepeat while already selecting.
+                return EngineAction::Suppress;
+            }
+            // F released → stop selecting, stay in the space layer.
+            self.space_select_active = false;
+            return EngineAction::Suppress;
+        }
+
+        if key_down
+            && !is_autorepeat
+            && keycode == f_keycode
+            && matches!(
+                self.hold_state,
+                HoldState::HoldPending(modifier) | HoldState::Holding(modifier)
+                    if modifier == space_keycode
+            )
+        {
+            self.hold_state = HoldState::Holding(space_keycode);
+            self.space_select_active = true;
+            return EngineAction::Suppress;
+        }
+
         let is_option_key = matches!(
             VirtualKeyCode::from_raw(keycode),
             Some(VirtualKeyCode::Option | VirtualKeyCode::RightOption)
@@ -1637,6 +1677,7 @@ impl MappingEngine {
 
             // ── Modifier↑ in Holding → release all held keys, return to idle ──
             (HoldState::Holding(modifier_keycode), kc, false) if kc == modifier_keycode => {
+                self.space_select_active = false;
                 let releases = self.drain_held_keys();
                 self.hold_state = HoldState::Idle;
                 if releases.is_empty() {
@@ -1896,6 +1937,9 @@ mod tests {
     }
     fn o_key() -> u16 {
         VirtualKeyCode::O as u16
+    }
+    fn f_key() -> u16 {
+        VirtualKeyCode::F as u16
     }
     fn comma() -> u16 {
         0x2B
@@ -4234,6 +4278,150 @@ mod tests {
         // Disable → should reset
         engine.set_enabled(false);
         assert_eq!(engine.mouse_mode, MouseModeState::Inactive);
+    }
+
+    #[test]
+    fn space_select_f_adds_shift_to_jkli() {
+        let mut engine = MappingEngine::new();
+        assert!(matches!(
+            engine.process_key(space(), true, false, 0),
+            EngineAction::Suppress
+        ));
+        // F↓ commits the space layer and enables selection without emitting a key.
+        assert!(matches!(
+            engine.process_key(f_key(), true, false, 0),
+            EngineAction::Suppress
+        ));
+        assert_eq!(engine.hold_state, HoldState::Holding(space()));
+
+        // JKLI now extend the selection: each arrow carries Shift on press and release.
+        assert_emit_with_flags(
+            &engine.process_key(j(), true, false, 0),
+            &[(left(), true, keycode::FLAG_SHIFT)],
+        );
+        assert_emit_with_flags(
+            &engine.process_key(j(), false, false, 0),
+            &[(left(), false, keycode::FLAG_SHIFT)],
+        );
+        assert_emit_with_flags(
+            &engine.process_key(k(), true, false, 0),
+            &[(down(), true, keycode::FLAG_SHIFT)],
+        );
+        engine.process_key(k(), false, false, 0);
+        assert_emit_with_flags(
+            &engine.process_key(i_key(), true, false, 0),
+            &[(up(), true, keycode::FLAG_SHIFT)],
+        );
+        engine.process_key(i_key(), false, false, 0);
+        assert_emit_with_flags(
+            &engine.process_key(l(), true, false, 0),
+            &[(right(), true, keycode::FLAG_SHIFT)],
+        );
+        engine.process_key(l(), false, false, 0);
+
+        // F↑ stops selecting but keeps the space layer; arrows move the caret again.
+        assert!(matches!(
+            engine.process_key(f_key(), false, false, 0),
+            EngineAction::Suppress
+        ));
+        assert_eq!(engine.hold_state, HoldState::Holding(space()));
+        assert_emit_with_flags(
+            &engine.process_key(j(), true, false, 0),
+            &[(left(), true, 0)],
+        );
+        engine.process_key(j(), false, false, 0);
+        // Space↑ returns to idle without a stray tap.
+        assert!(matches!(
+            engine.process_key(space(), false, false, 0),
+            EngineAction::Suppress
+        ));
+        assert_eq!(engine.hold_state, HoldState::Idle);
+    }
+
+    #[test]
+    fn space_select_f_autorepeat_is_suppressed() {
+        let mut engine = MappingEngine::new();
+        engine.process_key(space(), true, false, 0);
+        engine.process_key(f_key(), true, false, 0);
+        assert!(matches!(
+            engine.process_key(f_key(), true, true, 0),
+            EngineAction::Suppress
+        ));
+        assert_eq!(engine.hold_state, HoldState::Holding(space()));
+        // Selection survives the suppressed repeat.
+        assert_emit_with_flags(
+            &engine.process_key(j(), true, false, 0),
+            &[(left(), true, keycode::FLAG_SHIFT)],
+        );
+    }
+
+    #[test]
+    fn space_select_hn_select_to_line_edges() {
+        let mut engine = MappingEngine::new();
+        engine.process_key(space(), true, false, 0);
+        engine.process_key(f_key(), true, false, 0);
+        // H → Cmd+Left (line start) plus Shift selects to the line start.
+        assert_emit_with_flags(
+            &engine.process_key(h(), true, false, 0),
+            &[(left(), true, keycode::FLAG_COMMAND | keycode::FLAG_SHIFT)],
+        );
+        engine.process_key(h(), false, false, 0);
+        // N → Cmd+Right (line end) plus Shift selects to the line end.
+        assert_emit_with_flags(
+            &engine.process_key(n(), true, false, 0),
+            &[(right(), true, keycode::FLAG_COMMAND | keycode::FLAG_SHIFT)],
+        );
+    }
+
+    #[test]
+    fn space_select_uo_select_words() {
+        let mut engine = MappingEngine::new();
+        engine.process_key(space(), true, false, 0);
+        engine.process_key(f_key(), true, false, 0);
+        assert_emit_with_flags(
+            &engine.process_key(u_key(), true, false, 0),
+            &[(left(), true, keycode::FLAG_OPTION | keycode::FLAG_SHIFT)],
+        );
+        engine.process_key(u_key(), false, false, 0);
+        assert_emit_with_flags(
+            &engine.process_key(o_key(), true, false, 0),
+            &[(right(), true, keycode::FLAG_OPTION | keycode::FLAG_SHIFT)],
+        );
+    }
+
+    #[test]
+    fn space_select_space_release_stops_selection() {
+        let mut engine = MappingEngine::new();
+        engine.process_key(space(), true, false, 0);
+        engine.process_key(f_key(), true, false, 0);
+        engine.process_key(j(), true, false, 0);
+        // Space↑ releases the held Shift+Left and leaves the layer.
+        assert_emit_with_flags(
+            &engine.process_key(space(), false, false, 0),
+            &[(left(), false, keycode::FLAG_SHIFT)],
+        );
+        assert_eq!(engine.hold_state, HoldState::Idle);
+        // Selection is off; with no active layer J passes through normally.
+        assert!(matches!(
+            engine.process_key(j(), true, false, 0),
+            EngineAction::PassThrough
+        ));
+    }
+
+    #[test]
+    fn space_select_reset_input_state_clears_selection() {
+        let mut engine = MappingEngine::new();
+        engine.process_key(space(), true, false, 0);
+        engine.process_key(f_key(), true, false, 0);
+        engine.process_key(j(), true, false, 0);
+        engine.reset_input_state();
+        assert_eq!(engine.hold_state, HoldState::Idle);
+        // Selection is cleared; a fresh Space+J moves the caret without Shift.
+        engine.process_key(space(), true, false, 0);
+        assert_emit_with_flags(
+            &engine.process_key(j(), true, false, 0),
+            &[(left(), true, 0)],
+        );
     }
 
     #[test]

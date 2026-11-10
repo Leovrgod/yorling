@@ -59,8 +59,8 @@ function getLayerConfigs(language: AppLanguageId, platform: YorlingPlatform): La
           ? 'Turns the letter block into Windows-native navigation, deletion, return, and tab switching.'
           : 'Turns the letter block into navigation, deletion, return, and tab switching.',
         tips: isWindows
-          ? ['J K I L handle arrows', 'H/N use Home and End', 'U/O/R use Ctrl word shortcuts']
-          : ['J K I L handle arrows', 'H/U/O/N jump by line and word', 'Q/W/E/R/A/S cover edit actions'],
+          ? ['J K I L handle arrows', 'H/N use Home and End', 'U/O/R use Ctrl word shortcuts', 'Hold F as Shift: J K I L select by char/line, H/N select to line ends']
+          : ['J K I L handle arrows', 'H/U/O/N jump by line and word', 'Q/W/E/R/A/S cover edit actions', 'Hold F as Shift: J K I L select by char/line, H/N select to line ends'],
       },
       {
         id: 'number',
@@ -105,8 +105,8 @@ function getLayerConfigs(language: AppLanguageId, platform: YorlingPlatform): La
         ? '把主字母区变成 Windows 原生的方向、删除、换行和标签切换。'
         : '把主字母区变成方向、删除、换行和标签切换。',
       tips: isWindows
-        ? ['J K I L 负责方向', 'H/N 使用 Home 和 End', 'U/O/R 使用 Ctrl 系列整词快捷键']
-        : ['J K I L 负责方向', 'H/U/O/N 负责整词与行首行尾跳转', 'Q/W/E/R/A/S 是编辑动作'],
+        ? ['J K I L 负责方向', 'H/N 使用 Home 和 End', 'U/O/R 使用 Ctrl 系列整词快捷键', '按住 F 当作 Shift：J K I L 按字符/行选择，H/N 选到行首/行尾']
+        : ['J K I L 负责方向', 'H/U/O/N 负责整词与行首行尾跳转', 'Q/W/E/R/A/S 是编辑动作', '按住 F 当作 Shift：J K I L 按字符/行选择，H/N 选到行首/行尾'],
     },
     {
       id: 'number',
@@ -257,6 +257,8 @@ function getKeyboardCaption(rule: MappingRule, language: AppLanguageId, platform
         return 'Word Left';
       case 'nav-o':
         return 'Word Right';
+      case 'sel-f':
+        return 'Select Text';
       case 'edit-q':
         return '4 Spaces';
       case 'edit-w':
@@ -317,6 +319,8 @@ function getKeyboardCaption(rule: MappingRule, language: AppLanguageId, platform
       return '前一词';
     case 'nav-o':
       return '后一词';
+    case 'sel-f':
+      return '选择文本';
     case 'edit-q':
       return '4 空格';
     case 'edit-w':

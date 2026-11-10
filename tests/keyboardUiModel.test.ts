@@ -35,6 +35,17 @@ test('includes mouse back navigation on R in the Tab mouse mode', () => {
   assert.strictEqual(mouseLayer?.keyTargets.R?.description, 'Mouse Back');
 });
 
+test('exposes Shift-selection on F in the Space layer', () => {
+  const { layers } = buildKeyboardLayerViews(defaultRules, 'en');
+  const spaceLayer = layers.find((layer) => layer.id === 'space');
+
+  assert.ok(spaceLayer);
+  assert.strictEqual(spaceLayer?.keyTargets.F?.display, '⇧');
+  assert.strictEqual(spaceLayer?.keyTargets.F?.description, 'Select Text');
+  assert.ok(spaceLayer?.tips.some((tip) => tip.includes('Hold F as Shift')));
+  assert.ok(spaceLayer?.tips.some((tip) => tip.includes('H/N select to line ends')));
+});
+
 test('includes sidebar toggling on C in the Tab mouse mode', () => {
   const { layers } = buildKeyboardLayerViews(defaultRules, 'en');
   const mouseLayer = layers.find((layer) => layer.id === 'mouse');

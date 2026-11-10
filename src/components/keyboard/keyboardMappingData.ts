@@ -100,6 +100,19 @@ export const defaultRules: MappingRule[] = [
     modifierDisplay: 'Space (hold)',
     active: true,
   },
+  // === Selection: hold F as a Shift modifier for the navigation keys ===
+  {
+    id: 'sel-f',
+    type: 'simple',
+    category: 'navigation',
+    from: 'F',
+    fromDisplay: 'F',
+    to: 'Select Text',
+    toDisplay: '⇧',
+    modifier: 'Space',
+    modifierDisplay: 'Space (hold)',
+    active: true,
+  },
   // === Editing ===
   {
     id: 'edit-q',
