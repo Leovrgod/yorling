@@ -7,7 +7,7 @@ use std::os::raw::c_void;
 use std::ptr;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU64, Ordering},
     mpsc,
 };
 use std::thread;
@@ -119,9 +119,16 @@ unsafe extern "C" {
 
 // Mouse event type constants
 const K_CG_EVENT_MOUSE_MOVED: u32 = 5;
+const K_CG_EVENT_LEFT_MOUSE_DRAGGED: u32 = 6;
+const K_CG_EVENT_RIGHT_MOUSE_DRAGGED: u32 = 7;
+const K_CG_EVENT_OTHER_MOUSE_DRAGGED: u32 = 27;
 const K_CG_EVENT_LEFT_MOUSE_UP: u32 = 2;
 const K_CG_EVENT_RIGHT_MOUSE_UP: u32 = 4;
 const K_CG_EVENT_OTHER_MOUSE_UP: u32 = 26;
+
+/// CG button index + 1 while a keyboard-held mouse button is down (0 = none).
+/// The motion worker reads this to emit dragged instead of plain moved events.
+static HELD_MOUSE_BUTTON: AtomicU8 = AtomicU8::new(0);
 
 // Scroll wheel event constants
 const K_CG_EVENT_SCROLL_WHEEL: u32 = 22;
@@ -400,6 +407,7 @@ impl KeyboardInterceptor {
         self.stop_requested.store(true, Ordering::SeqCst);
         self.context.enabled.store(false, Ordering::SeqCst);
         self.context.mouse_motion.stop();
+        release_held_mouse_button(ptr::null_mut());
 
         // Release any stuck arrow keys before stopping
         let releases = self
@@ -436,6 +444,7 @@ impl KeyboardInterceptor {
         }
         if !enabled {
             self.context.mouse_motion.stop_motion();
+            release_held_mouse_button(ptr::null_mut());
         }
     }
 
@@ -580,15 +589,23 @@ pub(crate) fn get_cursor_position() -> CGPoint {
     }
 }
 
-/// Move the mouse cursor to an absolute position.
+/// Move the mouse cursor to an absolute position. While a button is held,
+/// emit dragged events so apps recognize the motion as a drag.
 pub(crate) fn emit_mouse_move_to(position: CGPoint) {
+    let held = HELD_MOUSE_BUTTON.load(Ordering::Relaxed);
+    let (event_type, button) = if held == 0 {
+        (K_CG_EVENT_MOUSE_MOVED, 0)
+    } else {
+        let button = u32::from(held - 1);
+        let dragged = match button {
+            0 => K_CG_EVENT_LEFT_MOUSE_DRAGGED,
+            1 => K_CG_EVENT_RIGHT_MOUSE_DRAGGED,
+            _ => K_CG_EVENT_OTHER_MOUSE_DRAGGED,
+        };
+        (dragged, button)
+    };
     unsafe {
-        let event = CGEventCreateMouseEvent(
-            ptr::null(),
-            K_CG_EVENT_MOUSE_MOVED,
-            position,
-            0, // button (ignored for mouse moved)
-        );
+        let event = CGEventCreateMouseEvent(ptr::null(), event_type, position, button);
         if !event.is_null() {
             CGEventSetIntegerValueField(event, K_CG_EVENT_SOURCE_USER_DATA, SELF_INJECTED_TAG);
             CGEventPost(K_CG_HID_EVENT_TAP, event);
@@ -597,31 +614,66 @@ pub(crate) fn emit_mouse_move_to(position: CGPoint) {
     }
 }
 
-/// Emit a mouse click (down + up) at the current cursor position.
-fn emit_mouse_click(proxy: CGEventTapProxy, button: yorling_engine::engine::MouseButton) {
+fn mouse_button_event_types(button: yorling_engine::engine::MouseButton) -> (u32, u32, u32) {
     use yorling_engine::engine::MouseButton;
-    let pos = get_cursor_position();
-    let (down_type, up_type, cg_button) = match button {
-        MouseButton::Left => (K_CG_EVENT_LEFT_MOUSE_DOWN, K_CG_EVENT_LEFT_MOUSE_UP, 0u32),
-        MouseButton::Right => (K_CG_EVENT_RIGHT_MOUSE_DOWN, K_CG_EVENT_RIGHT_MOUSE_UP, 1u32),
-        MouseButton::Back => (K_CG_EVENT_OTHER_MOUSE_DOWN, K_CG_EVENT_OTHER_MOUSE_UP, 3u32),
-    };
+    match button {
+        MouseButton::Left => (K_CG_EVENT_LEFT_MOUSE_DOWN, K_CG_EVENT_LEFT_MOUSE_UP, 0),
+        MouseButton::Right => (K_CG_EVENT_RIGHT_MOUSE_DOWN, K_CG_EVENT_RIGHT_MOUSE_UP, 1),
+        MouseButton::Back => (K_CG_EVENT_OTHER_MOUSE_DOWN, K_CG_EVENT_OTHER_MOUSE_UP, 3),
+    }
+}
+
+/// Post one mouse button transition. A null proxy posts to the HID tap for
+/// cleanup paths running outside the event-tap callback.
+fn post_mouse_button_event(
+    proxy: CGEventTapProxy,
+    event_type: u32,
+    pos: CGPoint,
+    cg_button: u32,
+) {
     unsafe {
-        // Mouse down
-        let down = CGEventCreateMouseEvent(ptr::null(), down_type, pos, cg_button);
-        if !down.is_null() {
-            CGEventSetIntegerValueField(down, K_CG_EVENT_SOURCE_USER_DATA, SELF_INJECTED_TAG);
-            CGEventTapPostEvent(proxy, down);
-            CFRelease(down as *const c_void);
-        }
-        // Mouse up
-        let up = CGEventCreateMouseEvent(ptr::null(), up_type, pos, cg_button);
-        if !up.is_null() {
-            CGEventSetIntegerValueField(up, K_CG_EVENT_SOURCE_USER_DATA, SELF_INJECTED_TAG);
-            CGEventTapPostEvent(proxy, up);
-            CFRelease(up as *const c_void);
+        let event = CGEventCreateMouseEvent(ptr::null(), event_type, pos, cg_button);
+        if !event.is_null() {
+            CGEventSetIntegerValueField(event, K_CG_EVENT_SOURCE_USER_DATA, SELF_INJECTED_TAG);
+            if proxy.is_null() {
+                CGEventPost(K_CG_HID_EVENT_TAP, event);
+            } else {
+                CGEventTapPostEvent(proxy, event);
+            }
+            CFRelease(event as *const c_void);
         }
     }
+}
+
+/// Emit a mouse click (down + up) at the current cursor position.
+fn emit_mouse_click(proxy: CGEventTapProxy, button: yorling_engine::engine::MouseButton) {
+    let pos = get_cursor_position();
+    let (down_type, up_type, cg_button) = mouse_button_event_types(button);
+    post_mouse_button_event(proxy, down_type, pos, cg_button);
+    post_mouse_button_event(proxy, up_type, pos, cg_button);
+}
+
+fn hold_mouse_button(proxy: CGEventTapProxy, button: yorling_engine::engine::MouseButton) {
+    let (down_type, _, cg_button) = mouse_button_event_types(button);
+    HELD_MOUSE_BUTTON.store((cg_button + 1) as u8, Ordering::Relaxed);
+    post_mouse_button_event(proxy, down_type, get_cursor_position(), cg_button);
+}
+
+/// Release the keyboard-held button, if any. Idempotent so every mode-exit
+/// path can call it without double-posting.
+fn release_held_mouse_button(proxy: CGEventTapProxy) {
+    use yorling_engine::engine::MouseButton;
+    let held = HELD_MOUSE_BUTTON.swap(0, Ordering::Relaxed);
+    if held == 0 {
+        return;
+    }
+    let button = match held - 1 {
+        0 => MouseButton::Left,
+        1 => MouseButton::Right,
+        _ => MouseButton::Back,
+    };
+    let (_, up_type, cg_button) = mouse_button_event_types(button);
+    post_mouse_button_event(proxy, up_type, get_cursor_position(), cg_button);
 }
 
 /// Emit a mouse scroll wheel event with the given line delta.
@@ -660,6 +712,7 @@ unsafe fn handle_tapped_event(
         let data = unsafe { &*(user_info as *const (Arc<TapContext>, Arc<AtomicU64>)) };
         let context = &data.0;
         context.mouse_motion.stop_motion();
+        release_held_mouse_button(proxy);
         let (releases, bracket_action) = context
             .engine
             .lock()
@@ -791,6 +844,7 @@ unsafe fn handle_tapped_event(
 
     if mouse_mode_exited {
         context.mouse_motion.stop_motion();
+        release_held_mouse_button(proxy);
     }
 
     match action {
@@ -822,6 +876,13 @@ fn dispatch_system_action(context: &TapContext, proxy: CGEventTapProxy, action: 
         SystemAction::MouseClick { button } => {
             emit_mouse_click(proxy, button);
         }
+        SystemAction::MouseButtonHold { button, pressed } => {
+            if pressed {
+                hold_mouse_button(proxy, button);
+            } else {
+                release_held_mouse_button(proxy);
+            }
+        }
         SystemAction::MouseScroll { direction } => {
             let lines = match direction {
                 MouseScrollDirection::Up => MOUSE_SCROLL_LINES,
@@ -832,6 +893,7 @@ fn dispatch_system_action(context: &TapContext, proxy: CGEventTapProxy, action: 
         SystemAction::MouseModeChanged { active } => {
             if !active {
                 context.mouse_motion.stop_motion();
+                release_held_mouse_button(proxy);
             }
             forward_system_action(context, SystemAction::MouseModeChanged { active });
         }

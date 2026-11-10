@@ -79,6 +79,12 @@ pub enum SystemAction {
     MouseClick {
         button: MouseButton,
     },
+    /// Press or release a mouse button and keep it in that state.
+    /// A held left button turns cursor movement into dragging.
+    MouseButtonHold {
+        button: MouseButton,
+        pressed: bool,
+    },
     MouseScroll {
         direction: MouseScrollDirection,
     },
@@ -1069,14 +1075,21 @@ impl MappingEngine {
                     ));
                 }
 
-                // N/M → enter and stay in mouse mode while clicking.
+                // N/M → enter and stay in mouse mode. N presses the left
+                // button until released (tap = click, hold = drag); M clicks.
                 if let Some(button) = Self::mouse_click_button_for_key(keycode) {
                     self.mouse_mode = MouseModeState::Active;
                     self.tab_held_in_mouse_mode = true;
                     self.mouse_held_keys.insert(keycode);
-                    return MouseModeResult::Handled(EngineAction::System(
-                        SystemAction::MouseClick { button },
-                    ));
+                    let action = if button == MouseButton::Left {
+                        SystemAction::MouseButtonHold {
+                            button,
+                            pressed: true,
+                        }
+                    } else {
+                        SystemAction::MouseClick { button }
+                    };
+                    return MouseModeResult::Handled(EngineAction::System(action));
                 }
 
                 // U/O → enter mouse mode and scroll immediately.
@@ -1219,18 +1232,41 @@ impl MappingEngine {
                     return MouseModeResult::Handled(EngineAction::Suppress);
                 }
 
-                // N/M → one click per press. N keeps the mode only while Tab
-                // is physically held, allowing repeated taps such as a double-click.
+                // N is a holdable left button: tap = click, hold + JKLI = drag.
+                // Releasing N without Tab exits the mode, preserving the old
+                // tap-to-click-and-finish behavior. M stays a one-shot click.
                 if let Some(button) = Self::mouse_click_button_for_key(keycode) {
+                    if button == MouseButton::Left {
+                        if !key_down {
+                            if !self.mouse_held_keys.remove(&keycode) {
+                                return MouseModeResult::Handled(EngineAction::Suppress);
+                            }
+                            if !self.tab_held_in_mouse_mode {
+                                self.exit_mouse_mode();
+                            }
+                            return MouseModeResult::Handled(EngineAction::System(
+                                SystemAction::MouseButtonHold {
+                                    button,
+                                    pressed: false,
+                                },
+                            ));
+                        }
+                        if is_autorepeat || !self.mouse_held_keys.insert(keycode) {
+                            return MouseModeResult::Handled(EngineAction::Suppress);
+                        }
+                        return MouseModeResult::Handled(EngineAction::System(
+                            SystemAction::MouseButtonHold {
+                                button,
+                                pressed: true,
+                            },
+                        ));
+                    }
                     if !key_down {
                         self.mouse_held_keys.remove(&keycode);
                         return MouseModeResult::Handled(EngineAction::Suppress);
                     }
                     if is_autorepeat || !self.mouse_held_keys.insert(keycode) {
                         return MouseModeResult::Handled(EngineAction::Suppress);
-                    }
-                    if button == MouseButton::Left && !self.tab_held_in_mouse_mode {
-                        self.exit_mouse_mode();
                     }
                     return MouseModeResult::Handled(EngineAction::System(
                         SystemAction::MouseClick { button },
@@ -3607,7 +3643,7 @@ mod tests {
     }
 
     #[test]
-    fn mouse_mode_tab_then_n_clicks_left_and_stays_active_for_repeated_taps() {
+    fn mouse_mode_tab_then_n_presses_left_and_stays_active_for_repeated_taps() {
         let mut engine = MappingEngine::new();
         engine.set_enabled(true);
 
@@ -3615,27 +3651,35 @@ mod tests {
 
         assert_system(
             &engine.process_key(n(), true, false, 0),
-            SystemAction::MouseClick {
+            SystemAction::MouseButtonHold {
                 button: MouseButton::Left,
+                pressed: true,
             },
         );
         assert_eq!(engine.mouse_mode, MouseModeState::Active);
 
-        assert!(matches!(
-            engine.process_key(n(), false, false, 0),
-            EngineAction::Suppress
-        ));
+        assert_system(
+            &engine.process_key(n(), false, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: false,
+            },
+        );
 
         assert_system(
             &engine.process_key(n(), true, false, 0),
-            SystemAction::MouseClick {
+            SystemAction::MouseButtonHold {
                 button: MouseButton::Left,
+                pressed: true,
             },
         );
-        assert!(matches!(
-            engine.process_key(n(), false, false, 0),
-            EngineAction::Suppress
-        ));
+        assert_system(
+            &engine.process_key(n(), false, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: false,
+            },
+        );
 
         assert!(matches!(
             engine.process_key(tab(), false, false, 0),
@@ -3917,7 +3961,7 @@ mod tests {
     }
 
     #[test]
-    fn mouse_mode_active_n_clicks_left_and_stays_active() {
+    fn mouse_mode_active_n_holds_left_and_stays_active() {
         let mut engine = MappingEngine::new();
         engine.set_enabled(true);
 
@@ -3925,24 +3969,29 @@ mod tests {
         engine.process_key(tab(), true, false, 0);
         engine.process_key(j(), true, false, 0);
 
-        // N↓ → MouseClick Left, keeping mouse mode active
+        // N↓ → press left button, keeping mouse mode active
         assert_system(
             &engine.process_key(n(), true, false, 0),
-            SystemAction::MouseClick {
+            SystemAction::MouseButtonHold {
                 button: MouseButton::Left,
+                pressed: true,
             },
         );
         assert_eq!(engine.mouse_mode, MouseModeState::Active);
 
-        // N↑ is suppressed, and a fresh tap can click again.
-        assert!(matches!(
-            engine.process_key(n(), false, false, 0),
-            EngineAction::Suppress
-        ));
+        // N↑ releases the button, and a fresh press holds it again.
+        assert_system(
+            &engine.process_key(n(), false, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: false,
+            },
+        );
         assert_system(
             &engine.process_key(n(), true, false, 0),
-            SystemAction::MouseClick {
+            SystemAction::MouseButtonHold {
                 button: MouseButton::Left,
+                pressed: true,
             },
         );
     }
@@ -4039,17 +4088,20 @@ mod tests {
         engine.process_key(tab(), true, false, 0);
         engine.process_key(j(), true, false, 0);
 
-        // N↓ → click without exiting
+        // N↓ → press without exiting
         engine.process_key(n(), true, false, 0);
         assert_eq!(engine.mouse_mode, MouseModeState::Active);
 
-        // N↑ is suppressed but doesn't end the mode.
-        assert!(matches!(
-            engine.process_key(n(), false, false, 0),
-            EngineAction::Suppress
-        ));
+        // N↑ releases the button but doesn't end the mode while Tab is held.
+        assert_system(
+            &engine.process_key(n(), false, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: false,
+            },
+        );
 
-        // J↑ updates the movement vector normally after the click.
+        // J↑ updates the movement vector normally after the release.
         assert_system(
             &engine.process_key(j(), false, false, 0),
             SystemAction::MouseMove {
@@ -4186,18 +4238,24 @@ mod tests {
             EngineAction::Suppress
         ));
 
-        // N↓ → left-click and exit as in the original single-click behavior.
+        // N↓ presses the button; the tap completes on N↑, which releases
+        // the button and exits the mode as in the original click behavior.
         assert_system(
             &engine.process_key(n(), true, false, 0),
-            SystemAction::MouseClick {
+            SystemAction::MouseButtonHold {
                 button: MouseButton::Left,
+                pressed: true,
+            },
+        );
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
+        assert_system(
+            &engine.process_key(n(), false, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: false,
             },
         );
         assert_eq!(engine.mouse_mode, MouseModeState::Inactive);
-        assert!(matches!(
-            engine.process_key(n(), false, false, 0),
-            EngineAction::Suppress
-        ));
     }
 
     #[test]
@@ -4310,32 +4368,180 @@ mod tests {
         engine.process_key(tab(), true, false, 0);
         engine.process_key(j(), true, false, 0);
 
-        // N↓ → click and stay in mouse mode
+        // N↓ → press and stay in mouse mode
         assert_system(
             &engine.process_key(n(), true, false, 0),
-            SystemAction::MouseClick {
+            SystemAction::MouseButtonHold {
                 button: MouseButton::Left,
+                pressed: true,
             },
         );
         assert_eq!(engine.mouse_mode, MouseModeState::Active);
 
-        // N autorepeat is suppressed to avoid repeated clicks while holding N.
+        // N autorepeat is suppressed: the button stays down, no re-press.
         assert!(matches!(
             engine.process_key(n(), true, true, 0),
             EngineAction::Suppress
         ));
 
-        // N↑ releases the key, so another discrete press clicks again.
+        // N↑ releases the button, so a fresh press holds it again.
+        assert_system(
+            &engine.process_key(n(), false, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: false,
+            },
+        );
+        assert_system(
+            &engine.process_key(n(), true, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: true,
+            },
+        );
+    }
+
+    #[test]
+    fn mouse_mode_holding_n_drags_with_jkli() {
+        let mut engine = MappingEngine::new();
+        engine.set_enabled(true);
+
+        engine.process_key(tab(), true, false, 0);
+        engine.process_key(j(), true, false, 0);
+
+        // N↓ presses the left button; movement keys keep updating the vector.
+        assert_system(
+            &engine.process_key(n(), true, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: true,
+            },
+        );
+        assert_system(
+            &engine.process_key(k(), true, false, 0),
+            SystemAction::MouseMove {
+                x: -1,
+                y: 1,
+                fast: true,
+            },
+        );
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
+
+        // N↑ drops; the mode and movement survive while Tab is held.
+        assert_system(
+            &engine.process_key(n(), false, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: false,
+            },
+        );
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
+        assert_system(
+            &engine.process_key(j(), false, false, 0),
+            SystemAction::MouseMove {
+                x: 0,
+                y: 1,
+                fast: true,
+            },
+        );
+    }
+
+    #[test]
+    fn mouse_mode_tab_release_mid_drag_keeps_button_until_n_release() {
+        let mut engine = MappingEngine::new();
+        engine.set_enabled(true);
+
+        // Tab+N enters the mode with the button already down.
+        engine.process_key(tab(), true, false, 0);
+        assert_system(
+            &engine.process_key(n(), true, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: true,
+            },
+        );
+
+        // Tab↑ only slows movement; the drag continues.
+        assert!(matches!(
+            engine.process_key(tab(), false, false, 0),
+            EngineAction::Suppress
+        ));
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
+        assert_system(
+            &engine.process_key(k(), true, false, 0),
+            SystemAction::MouseMove {
+                x: 0,
+                y: 1,
+                fast: false,
+            },
+        );
+
+        // N↑ without Tab drops and finishes the gesture.
+        assert_system(
+            &engine.process_key(n(), false, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: false,
+            },
+        );
+        assert_eq!(engine.mouse_mode, MouseModeState::Inactive);
+    }
+
+    #[test]
+    fn mouse_mode_n_release_without_press_is_suppressed() {
+        let mut engine = MappingEngine::new();
+        engine.set_enabled(true);
+
+        engine.process_key(tab(), true, false, 0);
+        engine.process_key(j(), true, false, 0);
+
+        // N was never pressed in this mode; its key-up must not emit a
+        // stray button release.
         assert!(matches!(
             engine.process_key(n(), false, false, 0),
             EngineAction::Suppress
         ));
-        assert_system(
-            &engine.process_key(n(), true, false, 0),
-            SystemAction::MouseClick {
-                button: MouseButton::Left,
-            },
-        );
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
+    }
+
+    #[test]
+    fn mouse_mode_exit_while_n_held_suppresses_late_n_release() {
+        let mut engine = MappingEngine::new();
+        engine.set_enabled(true);
+
+        engine.process_key(tab(), true, false, 0);
+        engine.process_key(j(), true, false, 0);
+        engine.process_key(n(), true, false, 0);
+
+        // An unrelated key exits the mode; the platform releases the button
+        // on the mode transition, and the late N↑ must not reach the app.
+        assert!(matches!(
+            engine.process_key(d(), true, false, 0),
+            EngineAction::PassThrough
+        ));
+        assert_eq!(engine.mouse_mode, MouseModeState::Inactive);
+        assert!(matches!(
+            engine.process_key(n(), false, false, 0),
+            EngineAction::Suppress
+        ));
+    }
+
+    #[test]
+    fn mouse_mode_cancel_while_n_held() {
+        let mut engine = MappingEngine::new();
+        engine.set_enabled(true);
+
+        engine.process_key(tab(), true, false, 0);
+        engine.process_key(n(), true, false, 0);
+
+        // External cancel (physical mouse click) notifies the platform, which
+        // releases the held button on the mode transition.
+        assert!(engine.cancel_mouse_mode().is_some());
+        assert_eq!(engine.mouse_mode, MouseModeState::Inactive);
+        assert!(matches!(
+            engine.process_key(n(), false, false, 0),
+            EngineAction::Suppress
+        ));
     }
 
     #[test]

@@ -970,6 +970,7 @@ mod platform {
                 AltTabCommand::System(
                     SystemAction::MouseMove { .. }
                     | SystemAction::MouseClick { .. }
+                    | SystemAction::MouseButtonHold { .. }
                     | SystemAction::MouseScroll { .. }
                     | SystemAction::MouseModeChanged { .. },
                 ) => {}

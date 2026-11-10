@@ -79,6 +79,7 @@ impl InterceptorState {
                     // MouseModeChanged could be used for UI feedback in the future.
                     SystemAction::MouseMove { .. }
                     | SystemAction::MouseClick { .. }
+                    | SystemAction::MouseButtonHold { .. }
                     | SystemAction::MouseScroll { .. }
                     | SystemAction::MouseModeChanged { .. } => {}
                 });
@@ -103,6 +104,7 @@ impl InterceptorState {
                     // Alt+Tab overlay is intentionally disabled on Windows.
                     SystemAction::MouseMove { .. }
                     | SystemAction::MouseClick { .. }
+                    | SystemAction::MouseButtonHold { .. }
                     | SystemAction::MouseScroll { .. }
                     | SystemAction::MouseModeChanged { .. }
                     | SystemAction::AltTabCycle { .. }

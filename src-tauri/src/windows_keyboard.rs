@@ -97,6 +97,7 @@ impl SmoothMouseMotion {
 enum MouseCommand {
     Move { dx: f64, dy: f64 },
     Click(MouseButton),
+    ButtonHold { button: MouseButton, pressed: bool },
     Scroll(i32),
     Shutdown,
 }
@@ -126,6 +127,9 @@ impl MouseActionDispatcher {
                 match command {
                     MouseCommand::Move { dx, dy } => emit_mouse_move(dx, dy),
                     MouseCommand::Click(button) => emit_mouse_click(button),
+                    MouseCommand::ButtonHold { button, pressed } => {
+                        emit_mouse_button(button, pressed)
+                    }
                     MouseCommand::Scroll(lines) => emit_mouse_scroll(lines),
                     MouseCommand::Shutdown => break,
                 }
@@ -227,6 +231,7 @@ struct HookContext {
     system_action_handler: Mutex<Option<Arc<dyn Fn(SystemAction) + Send + Sync>>>,
     mouse_actions: Arc<MouseActionDispatcher>,
     mouse_motion: MouseMotionController,
+    held_mouse_button: Mutex<Option<MouseButton>>,
 }
 
 impl HookContext {
@@ -241,6 +246,7 @@ impl HookContext {
             system_action_handler: Mutex::new(None),
             mouse_actions: Arc::clone(&mouse_actions),
             mouse_motion: MouseMotionController::new(mouse_actions),
+            held_mouse_button: Mutex::new(None),
         }
     }
 }
@@ -339,6 +345,7 @@ impl WindowsKeyboardInterceptor {
 
             context.enabled.store(false, Ordering::SeqCst);
             context.mouse_motion.stop();
+            release_held_mouse_button(&context);
             context.mouse_actions.stop();
             if let Ok(mut engine) = context.engine.lock() {
                 let flags = current_physical_flags(&context);
@@ -385,6 +392,7 @@ impl WindowsKeyboardInterceptor {
     pub fn stop(&self) {
         self.context.enabled.store(false, Ordering::SeqCst);
         self.context.mouse_motion.stop_motion();
+        release_held_mouse_button(&self.context);
         release_synthetic_restored_modifiers(&self.context);
 
         if let Ok(mut engine) = self.context.engine.lock() {
@@ -428,6 +436,7 @@ impl WindowsKeyboardInterceptor {
 
         if !enabled {
             self.context.mouse_motion.stop_motion();
+            release_held_mouse_button(&self.context);
             self.context.physical_keys.lock().unwrap().clear();
         }
     }
@@ -557,6 +566,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
     if mouse_mode_exited {
         context.mouse_motion.stop_motion();
+        release_held_mouse_button(&context);
     }
 
     if dispatch_engine_action(&context, action, flags) {
@@ -840,6 +850,17 @@ fn desired_flags_for_synthetic_key(key: &SyntheticKey, physical_flags: u64) -> u
     }
 }
 
+/// Release the keyboard-held button, if any. Idempotent so every mode-exit
+/// path can call it without double-posting.
+fn release_held_mouse_button(context: &HookContext) {
+    let button = context.held_mouse_button.lock().unwrap().take();
+    if let Some(button) = button {
+        context
+            .mouse_actions
+            .dispatch(MouseCommand::ButtonHold { button, pressed: false });
+    }
+}
+
 fn dispatch_system_action(context: &HookContext, action: SystemAction) {
     match action {
         SystemAction::MouseMove { x, y, fast } => {
@@ -849,6 +870,16 @@ fn dispatch_system_action(context: &HookContext, action: SystemAction) {
         }
         SystemAction::MouseClick { button } => {
             context.mouse_actions.dispatch(MouseCommand::Click(button));
+        }
+        SystemAction::MouseButtonHold { button, pressed } => {
+            if pressed {
+                *context.held_mouse_button.lock().unwrap() = Some(button);
+                context
+                    .mouse_actions
+                    .dispatch(MouseCommand::ButtonHold { button, pressed: true });
+            } else {
+                release_held_mouse_button(context);
+            }
         }
         SystemAction::MouseScroll { direction } => {
             let lines = match direction {
@@ -860,6 +891,7 @@ fn dispatch_system_action(context: &HookContext, action: SystemAction) {
         SystemAction::MouseModeChanged { active } => {
             if !active {
                 context.mouse_motion.stop_motion();
+                release_held_mouse_button(context);
             }
             forward_system_action(context, SystemAction::MouseModeChanged { active });
         }
@@ -1008,22 +1040,26 @@ fn emit_mouse_move(dx: f64, dy: f64) {
     send_inputs(&mut inputs);
 }
 
-fn emit_mouse_click(button: MouseButton) {
-    let mut inputs = Vec::new();
+fn mouse_button_flags(button: MouseButton) -> (u32, u32, u32) {
     match button {
-        MouseButton::Left => {
-            push_mouse_input(&mut inputs, 0, 0, 0, MOUSEEVENTF_LEFTDOWN);
-            push_mouse_input(&mut inputs, 0, 0, 0, MOUSEEVENTF_LEFTUP);
-        }
-        MouseButton::Right => {
-            push_mouse_input(&mut inputs, 0, 0, 0, MOUSEEVENTF_RIGHTDOWN);
-            push_mouse_input(&mut inputs, 0, 0, 0, MOUSEEVENTF_RIGHTUP);
-        }
-        MouseButton::Back => {
-            push_mouse_input(&mut inputs, 0, 0, XBUTTON1 as u32, MOUSEEVENTF_XDOWN);
-            push_mouse_input(&mut inputs, 0, 0, XBUTTON1 as u32, MOUSEEVENTF_XUP);
-        }
+        MouseButton::Left => (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, 0),
+        MouseButton::Right => (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, 0),
+        MouseButton::Back => (MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, XBUTTON1 as u32),
     }
+}
+
+fn emit_mouse_button(button: MouseButton, pressed: bool) {
+    let (down, up, data) = mouse_button_flags(button);
+    let mut inputs = Vec::new();
+    push_mouse_input(&mut inputs, 0, 0, data, if pressed { down } else { up });
+    send_inputs(&mut inputs);
+}
+
+fn emit_mouse_click(button: MouseButton) {
+    let (down, up, data) = mouse_button_flags(button);
+    let mut inputs = Vec::new();
+    push_mouse_input(&mut inputs, 0, 0, data, down);
+    push_mouse_input(&mut inputs, 0, 0, data, up);
     send_inputs(&mut inputs);
 }
 
