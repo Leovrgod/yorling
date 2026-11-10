@@ -674,6 +674,21 @@ impl MappingEngine {
         releases
     }
 
+    /// Recovery on a physical mouse click: reset every transient mode and
+    /// release synthetic keys still down, but keep suppressing releases and
+    /// autorepeat of mouse-layer keys the user may still be holding. Returns
+    /// the releases plus overlay-hide actions for bracket/mouse mode.
+    pub fn reset_input_state_for_mouse_click(
+        &mut self,
+    ) -> (Vec<SyntheticKey>, Option<SystemAction>, Option<SystemAction>) {
+        let bracket_action = self.cancel_bracket_mode();
+        let mouse_action = self.cancel_mouse_mode();
+        let suppressed: Vec<u16> = self.suppressed_releases.iter().copied().collect();
+        let releases = self.reset_input_state();
+        self.suppressed_releases.extend(suppressed);
+        (releases, bracket_action, mouse_action)
+    }
+
     pub fn cancel_alt_tab_session(&mut self) {
         self.alt_tab_active = false;
     }
@@ -706,6 +721,10 @@ impl MappingEngine {
 
     pub fn is_mouse_mode_active(&self) -> bool {
         self.mouse_mode != MouseModeState::Inactive
+    }
+
+    pub fn is_alt_tab_active(&self) -> bool {
+        self.alt_tab_active
     }
 
     pub fn event_count(&self) -> u64 {
@@ -1434,7 +1453,38 @@ impl MappingEngine {
         }
 
         if !key_down {
+            // The alt-tab session must end on Option release even when another
+            // mode would swallow this key-up (replayed keys, bracket mode);
+            // otherwise the session outlives the physical modifier and every
+            // later Tab keeps cycling apps instead of entering mouse mode.
+            if self.alt_tab_shortcut_enabled
+                && self.alt_tab_active
+                && matches!(
+                    VirtualKeyCode::from_raw(keycode),
+                    Some(VirtualKeyCode::Option | VirtualKeyCode::RightOption)
+                )
+                && flags & keycode::FLAG_OPTION == 0
+            {
+                self.alt_tab_active = false;
+                self.suppressed_releases.remove(&keycode);
+                if let Some(info) = self.replayed_keys.remove(&keycode) {
+                    // The replayed Option↓ is still down in the app; release
+                    // it alongside the commit instead of letting the replay
+                    // branch swallow this key-up and strand the session.
+                    return EngineAction::EmitAndSystem(
+                        vec![SyntheticKey {
+                            keycode,
+                            key_down: false,
+                            preserve_flags: info.preserve_flags,
+                            extra_flags: info.extra_flags,
+                        }],
+                        SystemAction::AltTabCommit,
+                    );
+                }
+                return EngineAction::System(SystemAction::AltTabCommit);
+            }
             if self.suppressed_releases.remove(&keycode) {
+                self.replayed_keys.remove(&keycode);
                 return EngineAction::Suppress;
             }
             if let Some(info) = self.replayed_keys.remove(&keycode) {
@@ -1445,6 +1495,14 @@ impl MappingEngine {
                     extra_flags: info.extra_flags,
                 }]);
             }
+        }
+
+        // A replayed key-down is already active in the app; while the physical
+        // key stays held, its OS autorepeat must type normally instead of
+        // arming a hold layer whose key-up would then be eaten by the replay
+        // release above, stranding the layer forever.
+        if key_down && self.replayed_keys.contains_key(&keycode) {
+            return EngineAction::PassThrough;
         }
 
         // Suppress autorepeat for keys held during mouse mode exit (prevent character leak).
@@ -1586,17 +1644,7 @@ impl MappingEngine {
             return EngineAction::Suppress;
         }
 
-        let is_option_key = matches!(
-            VirtualKeyCode::from_raw(keycode),
-            Some(VirtualKeyCode::Option | VirtualKeyCode::RightOption)
-        );
-
         if self.alt_tab_shortcut_enabled && self.alt_tab_active {
-            if !key_down && is_option_key && flags & keycode::FLAG_OPTION == 0 {
-                self.alt_tab_active = false;
-                return EngineAction::System(SystemAction::AltTabCommit);
-            }
-
             if key_down && keycode == VirtualKeyCode::Escape as u16 && !is_autorepeat {
                 self.alt_tab_active = false;
                 return EngineAction::System(SystemAction::AltTabCancel);
@@ -1652,7 +1700,10 @@ impl MappingEngine {
 
         match (self.hold_state, keycode, key_down) {
             // ── Modifier↓ in Idle → enter hold-pending ──
-            (HoldState::Idle, kc, true) if self.hold_layers.contains_key(&kc) => {
+            // Autorepeat must never arm a layer: if the key's first down was
+            // replayed elsewhere, its key-up will be consumed by the replay
+            // release and the layer would strand forever.
+            (HoldState::Idle, kc, true) if !is_autorepeat && self.hold_layers.contains_key(&kc) => {
                 self.hold_state = HoldState::HoldPending(kc);
                 EngineAction::Suppress
             }
@@ -5066,5 +5117,246 @@ mod tests {
         engine.cancel_mouse_mode();
         assert_eq!(engine.mouse_mode, MouseModeState::Inactive);
         assert!(!engine.tab_held_in_mouse_mode);
+    }
+
+    #[test]
+    fn mouse_mode_fallback_replay_autorepeat_keeps_hold_state_idle() {
+        for layer_key in [space(), three_key(), semicolon_key()] {
+            let mut engine = MappingEngine::new();
+            engine.set_enabled(true);
+
+            // Tab enters mouse-pending; the layer key is not a mouse key, so
+            // both are replayed as synthetics instead of arming the layer.
+            assert!(matches!(
+                engine.process_key(tab(), true, false, 0),
+                EngineAction::Suppress
+            ));
+            assert_emit(
+                &engine.process_key(layer_key, true, false, 0),
+                &[(tab(), true), (layer_key, true)],
+            );
+
+            // OS autorepeat while the key stays held must not arm the layer:
+            // the replay branch below consumes its key-up, which would
+            // otherwise strand the layer forever.
+            assert!(matches!(
+                engine.process_key(layer_key, true, true, 0),
+                EngineAction::PassThrough
+            ));
+            assert_eq!(engine.hold_state, HoldState::Idle);
+
+            assert_emit(
+                &engine.process_key(layer_key, false, false, 0),
+                &[(layer_key, false)],
+            );
+            assert_emit(&engine.process_key(tab(), false, false, 0), &[(tab(), false)]);
+            assert_eq!(engine.hold_state, HoldState::Idle);
+
+            // Mouse mode works again afterwards: N clicks, U/O scroll.
+            engine.process_key(tab(), true, false, 0);
+            assert_system(
+                &engine.process_key(n(), true, false, 0),
+                SystemAction::MouseButtonHold {
+                    button: MouseButton::Left,
+                    pressed: true,
+                },
+            );
+            engine.process_key(n(), false, false, 0);
+            assert_system(
+                &engine.process_key(u_key(), true, false, 0),
+                SystemAction::MouseScroll {
+                    direction: MouseScrollDirection::Up,
+                },
+            );
+            engine.process_key(u_key(), false, false, 0);
+            assert_system(
+                &engine.process_key(o_key(), true, false, 0),
+                SystemAction::MouseScroll {
+                    direction: MouseScrollDirection::Down,
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn lone_autorepeat_does_not_arm_hold_layer() {
+        let mut engine = MappingEngine::new();
+
+        // The first down was lost (e.g. wireless keyboard); only repeats arrive.
+        assert!(matches!(
+            engine.process_key(space(), true, true, 0),
+            EngineAction::PassThrough
+        ));
+        assert_eq!(engine.hold_state, HoldState::Idle);
+        assert!(matches!(
+            engine.process_key(space(), false, false, 0),
+            EngineAction::PassThrough
+        ));
+
+        // A real press afterwards still arms the layer normally.
+        assert!(matches!(
+            engine.process_key(space(), true, false, 0),
+            EngineAction::Suppress
+        ));
+        assert_eq!(engine.hold_state, HoldState::HoldPending(space()));
+    }
+
+    #[test]
+    fn alt_tab_commit_fires_when_option_was_replayed() {
+        let mut engine = MappingEngine::new();
+
+        // Semicolon tap enters bracket mode.
+        engine.process_key(semicolon_key(), true, false, 0);
+        engine.process_key(semicolon_key(), false, false, 0);
+
+        // Option is not a bracket prefix: it is replayed as a synthetic down.
+        assert_emit_and_system_with_flags(
+            &engine.process_key(option_key(), true, false, 0),
+            &[(option_key(), true, 0)],
+            SystemAction::BracketModeChanged {
+                visible: false,
+                pending_pair: None,
+            },
+        );
+
+        // Option+Tab starts the alt-tab session while Option is replayed.
+        assert_system(
+            &engine.process_key(tab(), true, false, keycode::FLAG_OPTION),
+            SystemAction::AltTabCycle { reverse: false },
+        );
+        assert!(engine.is_alt_tab_active());
+        assert!(matches!(
+            engine.process_key(tab(), false, false, keycode::FLAG_OPTION),
+            EngineAction::Suppress
+        ));
+
+        // Releasing Option must commit the session AND release the replayed
+        // down; swallowing the key-up would strand alt_tab_active forever.
+        assert_emit_and_system_with_flags(
+            &engine.process_key(option_key(), false, false, 0),
+            &[(option_key(), false, 0)],
+            SystemAction::AltTabCommit,
+        );
+        assert!(!engine.is_alt_tab_active());
+        assert!(engine.replayed_keys.is_empty());
+
+        // Tab now enters mouse mode again instead of cycling apps.
+        assert!(matches!(
+            engine.process_key(tab(), true, false, 0),
+            EngineAction::Suppress
+        ));
+        assert_system(
+            &engine.process_key(n(), true, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: true,
+            },
+        );
+    }
+
+    #[test]
+    fn alt_tab_commit_fires_even_while_bracket_mode_would_swallow_option_release() {
+        let mut engine = MappingEngine::new();
+
+        assert_system(
+            &engine.process_key(tab(), true, false, keycode::FLAG_OPTION),
+            SystemAction::AltTabCycle { reverse: false },
+        );
+        engine.process_key(tab(), false, false, keycode::FLAG_OPTION);
+
+        // A semicolon tap during the session arms bracket mode, which
+        // suppresses every key-up while waiting for a prefix.
+        engine.process_key(semicolon_key(), true, false, 0);
+        assert_system(
+            &engine.process_key(semicolon_key(), false, false, 0),
+            SystemAction::BracketModeChanged {
+                visible: true,
+                pending_pair: None,
+            },
+        );
+
+        // Option release must still commit the session.
+        assert_system(
+            &engine.process_key(option_key(), false, false, 0),
+            SystemAction::AltTabCommit,
+        );
+        assert!(!engine.is_alt_tab_active());
+    }
+
+    #[test]
+    fn mouse_click_reset_releases_held_layer_keys_and_clears_modes() {
+        let mut engine = MappingEngine::new();
+
+        engine.process_key(space(), true, false, 0);
+        engine.process_key(j(), true, false, 0);
+        assert_eq!(engine.hold_state, HoldState::Holding(space()));
+
+        let (releases, bracket_action, mouse_action) = engine.reset_input_state_for_mouse_click();
+        assert_eq!(engine.hold_state, HoldState::Idle);
+        assert!(bracket_action.is_none());
+        assert!(mouse_action.is_none());
+        assert_eq!(releases.len(), 1);
+        assert_eq!(releases[0].keycode, left());
+        assert!(!releases[0].key_down);
+
+        // The physical Space release arriving later must not re-trigger anything.
+        assert!(matches!(
+            engine.process_key(space(), false, false, 0),
+            EngineAction::PassThrough
+        ));
+
+        // Mouse mode is immediately usable again.
+        engine.process_key(tab(), true, false, 0);
+        assert_system(
+            &engine.process_key(n(), true, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: true,
+            },
+        );
+    }
+
+    #[test]
+    fn mouse_click_reset_keeps_suppressing_physically_held_mouse_keys() {
+        let mut engine = MappingEngine::new();
+
+        engine.process_key(tab(), true, false, 0);
+        engine.process_key(j(), true, false, 0);
+        engine.process_key(n(), true, false, 0);
+        assert!(engine.is_mouse_mode_active());
+
+        let (releases, bracket_action, mouse_action) = engine.reset_input_state_for_mouse_click();
+        assert!(releases.is_empty());
+        assert!(bracket_action.is_none());
+        assert_eq!(
+            mouse_action,
+            Some(SystemAction::MouseModeChanged { active: false })
+        );
+        assert!(!engine.is_mouse_mode_active());
+
+        // N and Tab may still be physically held: autorepeat must not type,
+        // and their eventual releases must stay swallowed.
+        assert!(matches!(
+            engine.process_key(n(), true, true, 0),
+            EngineAction::Suppress
+        ));
+        assert!(matches!(
+            engine.process_key(n(), false, false, 0),
+            EngineAction::Suppress
+        ));
+        assert!(matches!(
+            engine.process_key(j(), false, false, 0),
+            EngineAction::Suppress
+        ));
+        assert!(matches!(
+            engine.process_key(tab(), false, false, 0),
+            EngineAction::Suppress
+        ));
+
+        // Fresh typing works afterwards.
+        assert!(matches!(
+            engine.process_key(n(), true, false, 0),
+            EngineAction::PassThrough
+        ));
     }
 }

@@ -750,7 +750,10 @@ unsafe fn handle_tapped_event(
     let data = unsafe { &*(user_info as *const (Arc<TapContext>, Arc<AtomicU64>)) };
     let context = &data.0;
 
-    // Mouse-down events: cancel bracket/mouse mode if active, then pass through.
+    // Mouse-down events: a physical click is the user's recovery gesture for
+    // stuck keyboard state, so fully reset the engine and release synthetic
+    // keys still down. During an alt-tab session the click targets the
+    // overlay, so keep the session and only cancel bracket/mouse mode there.
     // Skip self-injected mouse events (from N/M clicks) to avoid self-cancellation.
     if event_type == K_CG_EVENT_LEFT_MOUSE_DOWN
         || event_type == K_CG_EVENT_RIGHT_MOUSE_DOWN
@@ -762,14 +765,35 @@ unsafe fn handle_tapped_event(
         }
         if context.enabled.load(Ordering::Relaxed) {
             if let Ok(mut engine) = context.engine.lock() {
-                let bracket_action = engine.cancel_bracket_mode();
-                let mouse_action = engine.cancel_mouse_mode();
-                drop(engine);
-                if let Some(action) = bracket_action {
-                    dispatch_system_action(context, proxy, action);
-                }
-                if let Some(action) = mouse_action {
-                    dispatch_system_action(context, proxy, action);
+                if engine.is_alt_tab_active() {
+                    let bracket_action = engine.cancel_bracket_mode();
+                    let mouse_action = engine.cancel_mouse_mode();
+                    drop(engine);
+                    if let Some(action) = bracket_action {
+                        dispatch_system_action(context, proxy, action);
+                    }
+                    if let Some(action) = mouse_action {
+                        dispatch_system_action(context, proxy, action);
+                    }
+                } else {
+                    let (releases, bracket_action, mouse_action) =
+                        engine.reset_input_state_for_mouse_click();
+                    drop(engine);
+                    for key in releases {
+                        let release = create_synthetic_key(key.keycode, false, key.extra_flags);
+                        if !release.is_null() {
+                            unsafe {
+                                CGEventTapPostEvent(proxy, release);
+                                CFRelease(release.cast());
+                            }
+                        }
+                    }
+                    if let Some(action) = bracket_action {
+                        dispatch_system_action(context, proxy, action);
+                    }
+                    if let Some(action) = mouse_action {
+                        dispatch_system_action(context, proxy, action);
+                    }
                 }
             }
         }
@@ -1248,6 +1272,83 @@ mod tests {
                     .is_mouse_mode_active()
             );
         }
+    }
+
+    #[test]
+    fn physical_mouse_down_resets_pending_hold_layer() {
+        let interceptor = KeyboardInterceptor::new();
+        interceptor.context.enabled.store(true, Ordering::SeqCst);
+        interceptor
+            .context
+            .engine
+            .lock()
+            .unwrap()
+            .process_key(VirtualKeyCode::Space as u16, true, false, 0);
+
+        let mut data = (
+            Arc::clone(&interceptor.context),
+            Arc::clone(&interceptor.event_count),
+        );
+        // HoldPending(Space) holds no synthetic keys, so the reset posts
+        // nothing into the desktop event stream.
+        unsafe {
+            let event = CGEventCreate(ptr::null());
+            assert!(!event.is_null());
+            CGEventSetType(event, K_CG_EVENT_LEFT_MOUSE_DOWN);
+            let result = event_tap_callback(
+                ptr::null_mut(),
+                K_CG_EVENT_LEFT_MOUSE_DOWN,
+                event,
+                &mut data as *mut _ as *mut c_void,
+            );
+            assert_eq!(result, event);
+            CFRelease(event.cast());
+        }
+
+        // The phantom Space layer must be gone: Tab enters mouse mode again.
+        let mut engine = interceptor.context.engine.lock().unwrap();
+        assert!(matches!(
+            engine.process_key(VirtualKeyCode::Tab as u16, true, false, 0),
+            EngineAction::Suppress
+        ));
+        assert!(engine.is_mouse_mode_active());
+    }
+
+    #[test]
+    fn physical_mouse_down_keeps_alt_tab_session_for_overlay_clicks() {
+        let interceptor = KeyboardInterceptor::new();
+        interceptor.context.enabled.store(true, Ordering::SeqCst);
+        assert!(matches!(
+            interceptor.context.engine.lock().unwrap().process_key(
+                VirtualKeyCode::Tab as u16,
+                true,
+                false,
+                core_keycode::FLAG_OPTION,
+            ),
+            EngineAction::System(SystemAction::AltTabCycle { reverse: false })
+        ));
+
+        let mut data = (
+            Arc::clone(&interceptor.context),
+            Arc::clone(&interceptor.event_count),
+        );
+        unsafe {
+            let event = CGEventCreate(ptr::null());
+            assert!(!event.is_null());
+            CGEventSetType(event, K_CG_EVENT_LEFT_MOUSE_DOWN);
+            let result = event_tap_callback(
+                ptr::null_mut(),
+                K_CG_EVENT_LEFT_MOUSE_DOWN,
+                event,
+                &mut data as *mut _ as *mut c_void,
+            );
+            assert_eq!(result, event);
+            CFRelease(event.cast());
+        }
+
+        // The click may target the alt-tab overlay; the session must survive.
+        let engine = interceptor.context.engine.lock().unwrap();
+        assert!(engine.is_alt_tab_active());
     }
 
     #[test]

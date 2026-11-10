@@ -114,7 +114,7 @@ test('clears synthetic restored modifiers before Windows mouse clicks', () => {
   assert.strictEqual(windowsKeyboardSource.includes('fn release_synthetic_restored_modifiers'), true);
   assert.match(
     windowsKeyboardSource,
-    /WM_LBUTTONDOWN \| WM_RBUTTONDOWN \| WM_MBUTTONDOWN \| WM_XBUTTONDOWN[\s\S]*release_synthetic_restored_modifiers\(&context\);[\s\S]*cancel_transient_modes_for_mouse_down\(&context\);/s,
+    /WM_LBUTTONDOWN \| WM_RBUTTONDOWN \| WM_MBUTTONDOWN \| WM_XBUTTONDOWN[\s\S]*release_synthetic_restored_modifiers\(&context\);[\s\S]*reset_input_state_for_mouse_down\(&context\);/s,
   );
   assert.match(
     windowsKeyboardSource,

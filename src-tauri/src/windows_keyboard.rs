@@ -505,7 +505,7 @@ unsafe extern "system" fn low_level_mouse_proc(
     ) {
         if let Some(context) = current_hook_context() {
             release_synthetic_restored_modifiers(&context);
-            cancel_transient_modes_for_mouse_down(&context);
+            reset_input_state_for_mouse_down(&context);
         }
     }
 
@@ -621,15 +621,22 @@ fn clear_native_alt_tab_state(context: &HookContext) {
     }
 }
 
-fn cancel_transient_modes_for_mouse_down(context: &HookContext) {
+fn reset_input_state_for_mouse_down(context: &HookContext) {
     if !context.enabled.load(Ordering::Relaxed) {
         return;
     }
 
-    let (bracket_action, mouse_action) = match context.engine.lock() {
-        Ok(mut engine) => (engine.cancel_bracket_mode(), engine.cancel_mouse_mode()),
+    // A physical click is the user's recovery gesture for stuck keyboard
+    // state: reset every transient mode and release synthetic keys still down.
+    let (releases, bracket_action, mouse_action) = match context.engine.lock() {
+        Ok(mut engine) => engine.reset_input_state_for_mouse_click(),
         Err(_) => return,
     };
+
+    let flags = current_physical_flags(context);
+    for key in releases {
+        emit_synthetic_key(key.keycode, key.key_down, key.extra_flags, flags);
+    }
 
     if let Some(action) = bracket_action {
         dispatch_system_action(context, action);
