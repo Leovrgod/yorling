@@ -86,10 +86,10 @@ function getLayerConfigs(language: AppLanguageId, platform: YorlingPlatform): La
         modifier: 'Tab',
         modifierKey: 'Tab',
         title: 'Mouse Layer',
-        description: 'Hold Tab for mouse control: JKLI move, U/O scroll, R back, C toggles sidebar, N/M click.',
+        description: 'Hold Tab for mouse control: JKLI move, U/O scroll, R back, C toggles sidebar, N/X left click (hold to drag), M right click.',
         tips: isWindows
-          ? ['Movement is faster while Tab is held', 'Movement slows after release', 'R sends the mouse back button', 'C sends Ctrl+B for editor sidebars', 'Hold Tab to tap N repeatedly without exiting; after Tab is released, N clicks and exits', 'M right-clicks and keeps the mode']
-          : ['Movement is faster while Tab is held', 'Movement slows after release', 'R sends the mouse back button', 'C sends Cmd+[ to toggle sidebars', 'Hold Tab to tap N repeatedly without exiting; after Tab is released, N clicks and exits', 'M right-clicks and keeps the mode'],
+          ? ['Movement is faster while Tab is held', 'Movement slows after release', 'R sends the mouse back button', 'C sends Ctrl+B for editor sidebars', 'Hold N or X while moving with JKLI to drag', 'Hold Tab to tap N/X repeatedly without exiting; after Tab is released, N/X clicks and exits', 'M right-clicks and keeps the mode']
+          : ['Movement is faster while Tab is held', 'Movement slows after release', 'R sends the mouse back button', 'C sends Cmd+[ to toggle sidebars', 'Hold N or X while moving with JKLI to drag', 'Hold Tab to tap N/X repeatedly without exiting; after Tab is released, N/X clicks and exits', 'M right-clicks and keeps the mode'],
       },
     ];
   }
@@ -132,10 +132,10 @@ function getLayerConfigs(language: AppLanguageId, platform: YorlingPlatform): La
       modifier: 'Tab',
       modifierKey: 'Tab',
       title: '鼠标层',
-      description: '按住 Tab 进入鼠标控制：JKLI 移动、U/O 滚动、R 后退、C 开关侧边栏、N/M 点击。',
+      description: '按住 Tab 进入鼠标控制：JKLI 移动、U/O 滚动、R 后退、C 开关侧边栏、N/X 左键（按住可拖动）、M 右键。',
       tips: isWindows
-        ? ['按住 Tab 时移动更快', '松开 Tab 仍保留方向，但速度会变慢', 'R 发送鼠标后退键', 'C 发送 Ctrl+B 适配编辑器侧边栏', '按住 Tab 时可再次按 N 连点且不退出；松开 Tab 后按 N 会点击并退出', 'M 右键后也保持鼠标层']
-        : ['按住 Tab 时移动更快', '松开 Tab 仍保留方向，但速度会变慢', 'R 发送鼠标后退键', 'C 发送 Cmd+[ 开关侧边栏', '按住 Tab 时可再次按 N 连点且不退出；松开 Tab 后按 N 会点击并退出', 'M 右键后也保持鼠标层'],
+        ? ['按住 Tab 时移动更快', '松开 Tab 仍保留方向，但速度会变慢', 'R 发送鼠标后退键', 'C 发送 Ctrl+B 适配编辑器侧边栏', '按住 N 或 X 配合 JKLI 移动即可拖动', '按住 Tab 时可再次按 N/X 连点且不退出；松开 Tab 后按 N/X 会点击并退出', 'M 右键后也保持鼠标层']
+        : ['按住 Tab 时移动更快', '松开 Tab 仍保留方向，但速度会变慢', 'R 发送鼠标后退键', 'C 发送 Cmd+[ 开关侧边栏', '按住 N 或 X 配合 JKLI 移动即可拖动', '按住 Tab 时可再次按 N/X 连点且不退出；松开 Tab 后按 N/X 会点击并退出', 'M 右键后也保持鼠标层'],
     },
   ];
 }
@@ -291,6 +291,8 @@ function getKeyboardCaption(rule: MappingRule, language: AppLanguageId, platform
         return platform === 'windows' ? 'Ctrl+B Sidebar' : 'Toggle Sidebar';
       case 'mouse-tab-n':
         return 'Left Click';
+      case 'mouse-tab-x':
+        return 'Left Click';
       case 'mouse-tab-m':
         return 'Right Click';
       default:
@@ -348,6 +350,8 @@ function getKeyboardCaption(rule: MappingRule, language: AppLanguageId, platform
     case 'mouse-tab-c':
       return platform === 'windows' ? 'Ctrl+B 侧边栏' : '开关侧边栏';
     case 'mouse-tab-n':
+      return '左键点击';
+    case 'mouse-tab-x':
       return '左键点击';
     case 'mouse-tab-m':
       return '右键点击';

@@ -17,6 +17,8 @@ test('builds four primary keyboard layers including the Tab mouse mode', () => {
   assert.strictEqual(mouseLayer?.keyTargets.J?.display, '←');
   assert.strictEqual(mouseLayer?.keyTargets.J?.description, 'Mouse Left');
   assert.strictEqual(mouseLayer?.keyTargets.N?.description, 'Left Click');
+  assert.strictEqual(mouseLayer?.keyTargets.X?.display, 'L Click');
+  assert.strictEqual(mouseLayer?.keyTargets.X?.description, 'Left Click');
   assert.strictEqual(mouseLayer?.keyTargets.M?.description, 'Right Click');
   assert.strictEqual(mouseLayer?.keyTargets.U?.display, '⇡');
   assert.strictEqual(mouseLayer?.keyTargets.U?.description, 'Scroll Up');

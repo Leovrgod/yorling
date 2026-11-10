@@ -742,6 +742,18 @@ export const defaultRules: MappingRule[] = [
     active: true,
   },
   {
+    id: 'mouse-tab-x',
+    type: 'simple',
+    category: 'mouse',
+    from: 'X',
+    fromDisplay: 'X',
+    to: 'Left Click',
+    toDisplay: 'L Click',
+    modifier: 'Tab',
+    modifierDisplay: 'Tab (hold)',
+    active: true,
+  },
+  {
     id: 'mouse-tab-m',
     type: 'simple',
     category: 'mouse',

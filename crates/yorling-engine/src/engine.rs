@@ -973,10 +973,17 @@ impl MappingEngine {
 
     fn mouse_click_button_for_key(keycode: u16) -> Option<MouseButton> {
         match VirtualKeyCode::from_raw(keycode) {
-            Some(VirtualKeyCode::N) => Some(MouseButton::Left),
+            Some(VirtualKeyCode::N | VirtualKeyCode::X) => Some(MouseButton::Left),
             Some(VirtualKeyCode::M) => Some(MouseButton::Right),
             _ => None,
         }
+    }
+
+    fn held_left_button_key_count(&self) -> usize {
+        [VirtualKeyCode::N as u16, VirtualKeyCode::X as u16]
+            .into_iter()
+            .filter(|kc| self.mouse_held_keys.contains(kc))
+            .count()
     }
 
     fn shortcut_action(target_keycode: u16, extra_flags: u64) -> EngineAction {
@@ -1075,7 +1082,7 @@ impl MappingEngine {
                     ));
                 }
 
-                // N/M → enter and stay in mouse mode. N presses the left
+                // N/X/M → enter and stay in mouse mode. N/X press the left
                 // button until released (tap = click, hold = drag); M clicks.
                 if let Some(button) = Self::mouse_click_button_for_key(keycode) {
                     self.mouse_mode = MouseModeState::Active;
@@ -1232,13 +1239,18 @@ impl MappingEngine {
                     return MouseModeResult::Handled(EngineAction::Suppress);
                 }
 
-                // N is a holdable left button: tap = click, hold + JKLI = drag.
-                // Releasing N without Tab exits the mode, preserving the old
-                // tap-to-click-and-finish behavior. M stays a one-shot click.
+                // N/X are holdable left buttons: tap = click, hold + JKLI = drag.
+                // They share one button state, so switching fingers mid-drag
+                // keeps the button held. Releasing the last one without Tab
+                // exits the mode, preserving the old tap-to-click-and-finish
+                // behavior. M stays a one-shot click.
                 if let Some(button) = Self::mouse_click_button_for_key(keycode) {
                     if button == MouseButton::Left {
                         if !key_down {
                             if !self.mouse_held_keys.remove(&keycode) {
+                                return MouseModeResult::Handled(EngineAction::Suppress);
+                            }
+                            if self.held_left_button_key_count() > 0 {
                                 return MouseModeResult::Handled(EngineAction::Suppress);
                             }
                             if !self.tab_held_in_mouse_mode {
@@ -1252,6 +1264,9 @@ impl MappingEngine {
                             ));
                         }
                         if is_autorepeat || !self.mouse_held_keys.insert(keycode) {
+                            return MouseModeResult::Handled(EngineAction::Suppress);
+                        }
+                        if self.held_left_button_key_count() > 1 {
                             return MouseModeResult::Handled(EngineAction::Suppress);
                         }
                         return MouseModeResult::Handled(EngineAction::System(
@@ -4540,6 +4555,251 @@ mod tests {
         assert_eq!(engine.mouse_mode, MouseModeState::Inactive);
         assert!(matches!(
             engine.process_key(n(), false, false, 0),
+            EngineAction::Suppress
+        ));
+    }
+
+    #[test]
+    fn mouse_mode_tab_then_x_presses_left_and_stays_active() {
+        let mut engine = MappingEngine::new();
+        engine.set_enabled(true);
+
+        engine.process_key(tab(), true, false, 0);
+
+        assert_system(
+            &engine.process_key(x_key(), true, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: true,
+            },
+        );
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
+
+        assert_system(
+            &engine.process_key(x_key(), false, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: false,
+            },
+        );
+        assert!(matches!(
+            engine.process_key(tab(), false, false, 0),
+            EngineAction::Suppress
+        ));
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
+    }
+
+    #[test]
+    fn mouse_mode_holding_x_drags_with_jkli() {
+        let mut engine = MappingEngine::new();
+        engine.set_enabled(true);
+
+        engine.process_key(tab(), true, false, 0);
+        engine.process_key(j(), true, false, 0);
+
+        assert_system(
+            &engine.process_key(x_key(), true, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: true,
+            },
+        );
+        assert_system(
+            &engine.process_key(k(), true, false, 0),
+            SystemAction::MouseMove {
+                x: -1,
+                y: 1,
+                fast: true,
+            },
+        );
+        assert_system(
+            &engine.process_key(x_key(), false, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: false,
+            },
+        );
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
+    }
+
+    #[test]
+    fn mouse_mode_x_release_without_tab_exits_mode() {
+        let mut engine = MappingEngine::new();
+        engine.set_enabled(true);
+
+        engine.process_key(tab(), true, false, 0);
+        engine.process_key(x_key(), true, false, 0);
+        engine.process_key(tab(), false, false, 0);
+
+        assert_system(
+            &engine.process_key(x_key(), false, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: false,
+            },
+        );
+        assert_eq!(engine.mouse_mode, MouseModeState::Inactive);
+    }
+
+    #[test]
+    fn mouse_mode_x_autorepeat_is_suppressed_while_mode_stays_active() {
+        let mut engine = MappingEngine::new();
+        engine.set_enabled(true);
+
+        engine.process_key(tab(), true, false, 0);
+        engine.process_key(j(), true, false, 0);
+
+        assert_system(
+            &engine.process_key(x_key(), true, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: true,
+            },
+        );
+        assert!(matches!(
+            engine.process_key(x_key(), true, true, 0),
+            EngineAction::Suppress
+        ));
+        assert_system(
+            &engine.process_key(x_key(), false, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: false,
+            },
+        );
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
+    }
+
+    #[test]
+    fn mouse_mode_n_then_x_overlap_keeps_button_held() {
+        let mut engine = MappingEngine::new();
+        engine.set_enabled(true);
+
+        engine.process_key(tab(), true, false, 0);
+        assert_system(
+            &engine.process_key(n(), true, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: true,
+            },
+        );
+
+        // X↓ while N is held must not press the button a second time.
+        assert!(matches!(
+            engine.process_key(x_key(), true, false, 0),
+            EngineAction::Suppress
+        ));
+        // N↑ while X is held must not drop the drag.
+        assert!(matches!(
+            engine.process_key(n(), false, false, 0),
+            EngineAction::Suppress
+        ));
+        assert_system(
+            &engine.process_key(k(), true, false, 0),
+            SystemAction::MouseMove {
+                x: 0,
+                y: 1,
+                fast: true,
+            },
+        );
+        // The last left key up releases the button.
+        assert_system(
+            &engine.process_key(x_key(), false, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: false,
+            },
+        );
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
+    }
+
+    #[test]
+    fn mouse_mode_x_then_n_overlap_without_tab_releases_on_last_key() {
+        let mut engine = MappingEngine::new();
+        engine.set_enabled(true);
+
+        engine.process_key(tab(), true, false, 0);
+        assert_system(
+            &engine.process_key(x_key(), true, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: true,
+            },
+        );
+        engine.process_key(tab(), false, false, 0);
+
+        assert!(matches!(
+            engine.process_key(n(), true, false, 0),
+            EngineAction::Suppress
+        ));
+        // Releasing X keeps the drag alive through N even without Tab.
+        assert!(matches!(
+            engine.process_key(x_key(), false, false, 0),
+            EngineAction::Suppress
+        ));
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
+
+        assert_system(
+            &engine.process_key(n(), false, false, 0),
+            SystemAction::MouseButtonHold {
+                button: MouseButton::Left,
+                pressed: false,
+            },
+        );
+        assert_eq!(engine.mouse_mode, MouseModeState::Inactive);
+    }
+
+    #[test]
+    fn mouse_mode_x_release_without_press_is_suppressed() {
+        let mut engine = MappingEngine::new();
+        engine.set_enabled(true);
+
+        engine.process_key(tab(), true, false, 0);
+        engine.process_key(j(), true, false, 0);
+
+        assert!(matches!(
+            engine.process_key(x_key(), false, false, 0),
+            EngineAction::Suppress
+        ));
+        assert_eq!(engine.mouse_mode, MouseModeState::Active);
+    }
+
+    #[test]
+    fn mouse_mode_exit_while_n_and_x_held_suppresses_both_releases() {
+        let mut engine = MappingEngine::new();
+        engine.set_enabled(true);
+
+        engine.process_key(tab(), true, false, 0);
+        engine.process_key(n(), true, false, 0);
+        engine.process_key(x_key(), true, false, 0);
+
+        assert!(matches!(
+            engine.process_key(d(), true, false, 0),
+            EngineAction::PassThrough
+        ));
+        assert_eq!(engine.mouse_mode, MouseModeState::Inactive);
+        assert!(matches!(
+            engine.process_key(n(), false, false, 0),
+            EngineAction::Suppress
+        ));
+        assert!(matches!(
+            engine.process_key(x_key(), false, false, 0),
+            EngineAction::Suppress
+        ));
+    }
+
+    #[test]
+    fn mouse_mode_cancel_while_x_held() {
+        let mut engine = MappingEngine::new();
+        engine.set_enabled(true);
+
+        engine.process_key(tab(), true, false, 0);
+        engine.process_key(x_key(), true, false, 0);
+
+        assert!(engine.cancel_mouse_mode().is_some());
+        assert_eq!(engine.mouse_mode, MouseModeState::Inactive);
+        assert!(matches!(
+            engine.process_key(x_key(), false, false, 0),
             EngineAction::Suppress
         ));
     }
