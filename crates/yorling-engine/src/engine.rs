@@ -6,6 +6,8 @@ use yorling_core::keycode::{self, VirtualKeyCode};
 pub enum EngineAction {
     /// Pass the original event through unmodified.
     PassThrough,
+    /// Pass the original event through while dispatching a system action.
+    PassThroughAndSystem(SystemAction),
     /// Suppress the event (don't forward it).
     Suppress,
     /// Emit one or more synthetic key events instead.
@@ -680,7 +682,11 @@ impl MappingEngine {
     /// the releases plus overlay-hide actions for bracket/mouse mode.
     pub fn reset_input_state_for_mouse_click(
         &mut self,
-    ) -> (Vec<SyntheticKey>, Option<SystemAction>, Option<SystemAction>) {
+    ) -> (
+        Vec<SyntheticKey>,
+        Option<SystemAction>,
+        Option<SystemAction>,
+    ) {
         let bracket_action = self.cancel_bracket_mode();
         let mouse_action = self.cancel_mouse_mode();
         let suppressed: Vec<u16> = self.suppressed_releases.iter().copied().collect();
@@ -1325,6 +1331,13 @@ impl MappingEngine {
         key_down: bool,
         is_autorepeat: bool,
     ) -> EngineAction {
+        // Only consume releases whose corresponding down was consumed by the
+        // bracket layer. Those are tracked in suppressed_releases and handled
+        // before reaching this function; all other keys were already visible
+        // to the system and must remain paired, including modifier keys.
+        if !key_down {
+            return EngineAction::PassThrough;
+        }
         if is_autorepeat {
             return EngineAction::Suppress;
         }
@@ -1332,11 +1345,8 @@ impl MappingEngine {
         match self.bracket_mode {
             BracketModeState::Inactive => EngineAction::PassThrough,
             BracketModeState::WaitingForPrefix => {
-                if !key_down {
-                    return EngineAction::Suppress;
-                }
-
                 if let Some(pair) = Self::bracket_pair_for_prefix(keycode) {
+                    self.suppressed_releases.insert(keycode);
                     self.bracket_mode = BracketModeState::WaitingForConfirm {
                         pending_pair: pair,
                         prefix_keycode: keycode,
@@ -1354,10 +1364,6 @@ impl MappingEngine {
                 pending_pair,
                 prefix_keycode,
             } => {
-                if !key_down {
-                    return EngineAction::Suppress;
-                }
-
                 if keycode == VirtualKeyCode::K as u16 {
                     self.bracket_mode = BracketModeState::Inactive;
                     self.suppressed_releases.insert(keycode);
@@ -1481,7 +1487,7 @@ impl MappingEngine {
                         SystemAction::AltTabCommit,
                     );
                 }
-                return EngineAction::System(SystemAction::AltTabCommit);
+                return EngineAction::PassThroughAndSystem(SystemAction::AltTabCommit);
             }
             if self.suppressed_releases.remove(&keycode) {
                 self.replayed_keys.remove(&keycode);
@@ -2795,7 +2801,7 @@ mod tests {
         let action = engine.process_key(option_key(), false, false, 0);
         assert!(matches!(
             action,
-            EngineAction::System(SystemAction::AltTabCommit)
+            EngineAction::PassThroughAndSystem(SystemAction::AltTabCommit)
         ));
     }
 
@@ -3033,6 +3039,61 @@ mod tests {
                 pending_pair: None,
             },
         );
+    }
+
+    #[test]
+    fn bracket_mode_preserves_releases_of_keys_pressed_before_entry() {
+        for waiting_for_confirm in [false, true] {
+            for key in [
+                VirtualKeyCode::Control,
+                VirtualKeyCode::Shift,
+                VirtualKeyCode::Option,
+                VirtualKeyCode::Command,
+                VirtualKeyCode::RightControl,
+                VirtualKeyCode::RightShift,
+                VirtualKeyCode::RightOption,
+                VirtualKeyCode::RightCommand,
+                VirtualKeyCode::A,
+            ] {
+                let mut engine = MappingEngine::new();
+                let key = key as u16;
+                assert!(matches!(
+                    engine.process_key(key, true, false, 0),
+                    EngineAction::PassThrough
+                ));
+                engine.process_key(semicolon_key(), true, false, 0);
+                engine.process_key(semicolon_key(), false, false, 0);
+                if waiting_for_confirm {
+                    engine.process_key(VirtualKeyCode::X as u16, true, false, 0);
+                }
+                assert!(
+                    matches!(
+                        engine.process_key(key, false, false, 0),
+                        EngineAction::PassThrough
+                    ),
+                    "bracket mode swallowed release of key {key:#x}, waiting_for_confirm={waiting_for_confirm}"
+                );
+                if waiting_for_confirm {
+                    assert!(matches!(
+                        engine.process_key(VirtualKeyCode::X as u16, false, false, 0),
+                        EngineAction::Suppress
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bracket_prefix_release_remains_suppressed_after_confirmation() {
+        let mut engine = MappingEngine::new();
+        engine.process_key(semicolon_key(), true, false, 0);
+        engine.process_key(semicolon_key(), false, false, 0);
+        engine.process_key(VirtualKeyCode::X as u16, true, false, 0);
+        engine.process_key(k(), true, false, 0);
+        assert!(matches!(
+            engine.process_key(VirtualKeyCode::X as u16, false, false, 0),
+            EngineAction::Suppress
+        ));
     }
 
     #[test]
@@ -4306,6 +4367,24 @@ mod tests {
     }
 
     #[test]
+    fn mouse_mode_exits_when_a_modifier_is_pressed() {
+        let mut engine = MappingEngine::new();
+        engine.process_key(tab(), true, false, 0);
+        engine.process_key(j(), true, false, 0);
+        assert!(engine.is_mouse_mode_active());
+        assert!(matches!(
+            engine.process_key(
+                VirtualKeyCode::Shift as u16,
+                true,
+                false,
+                keycode::FLAG_SHIFT
+            ),
+            EngineAction::PassThrough
+        ));
+        assert!(!engine.is_mouse_mode_active());
+    }
+
+    #[test]
     fn mouse_mode_option_tab_triggers_alt_tab_not_mouse() {
         let mut engine = MappingEngine::new();
         engine.set_enabled(true);
@@ -5149,7 +5228,10 @@ mod tests {
                 &engine.process_key(layer_key, false, false, 0),
                 &[(layer_key, false)],
             );
-            assert_emit(&engine.process_key(tab(), false, false, 0), &[(tab(), false)]);
+            assert_emit(
+                &engine.process_key(tab(), false, false, 0),
+                &[(tab(), false)],
+            );
             assert_eq!(engine.hold_state, HoldState::Idle);
 
             // Mouse mode works again afterwards: N clicks, U/O scroll.
@@ -5276,10 +5358,10 @@ mod tests {
         );
 
         // Option release must still commit the session.
-        assert_system(
-            &engine.process_key(option_key(), false, false, 0),
-            SystemAction::AltTabCommit,
-        );
+        assert!(matches!(
+            engine.process_key(option_key(), false, false, 0),
+            EngineAction::PassThroughAndSystem(SystemAction::AltTabCommit)
+        ));
         assert!(!engine.is_alt_tab_active());
     }
 

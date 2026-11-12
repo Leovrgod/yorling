@@ -50,6 +50,9 @@ const K_CG_EVENT_OTHER_MOUSE_DOWN: u32 = 25;
 const K_CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
 const K_CG_KEYBOARD_EVENT_AUTOREPEAT: u32 = 8; // CGEventTypes.h; 11 is scroll delta
 const K_CG_EVENT_SOURCE_USER_DATA: u32 = 42;
+// Device-independent modifier bits (Caps Lock, Shift, Control, Option,
+// Command, numeric pad, Help and Fn); discard keyboard-only event metadata.
+const MOUSE_MODIFIER_FLAGS: u64 = 0x00FF_0000;
 // Undocumented CGEvent payload slots used by system-defined/media-key events.
 const K_CG_EVENT_DATA1: u32 = 149;
 
@@ -407,7 +410,7 @@ impl KeyboardInterceptor {
         self.stop_requested.store(true, Ordering::SeqCst);
         self.context.enabled.store(false, Ordering::SeqCst);
         self.context.mouse_motion.stop();
-        release_held_mouse_button(ptr::null_mut());
+        release_held_mouse_button(ptr::null_mut(), self.context.mouse_motion.input_flags());
 
         // Release any stuck arrow keys before stopping
         let releases = self
@@ -444,7 +447,7 @@ impl KeyboardInterceptor {
         }
         if !enabled {
             self.context.mouse_motion.stop_motion();
-            release_held_mouse_button(ptr::null_mut());
+            release_held_mouse_button(ptr::null_mut(), self.context.mouse_motion.input_flags());
         }
     }
 
@@ -515,6 +518,15 @@ fn create_synthetic_key(keycode: u16, key_down: bool, flags: u64) -> CGEventRef 
             CGEventSetFlags(event, flags);
         }
         event
+    }
+}
+
+/// The default event source can reflect an earlier synthetic mouse event.
+/// Always apply the triggering input's modifier state explicitly instead.
+fn configure_mouse_event(event: CGEventRef, input_flags: u64) {
+    unsafe {
+        CGEventSetIntegerValueField(event, K_CG_EVENT_SOURCE_USER_DATA, SELF_INJECTED_TAG);
+        CGEventSetFlags(event, input_flags & MOUSE_MODIFIER_FLAGS);
     }
 }
 
@@ -591,7 +603,7 @@ pub(crate) fn get_cursor_position() -> CGPoint {
 
 /// Move the mouse cursor to an absolute position. While a button is held,
 /// emit dragged events so apps recognize the motion as a drag.
-pub(crate) fn emit_mouse_move_to(position: CGPoint) {
+pub(crate) fn emit_mouse_move_to(position: CGPoint, input_flags: u64) {
     let held = HELD_MOUSE_BUTTON.load(Ordering::Relaxed);
     let (event_type, button) = if held == 0 {
         (K_CG_EVENT_MOUSE_MOVED, 0)
@@ -607,7 +619,7 @@ pub(crate) fn emit_mouse_move_to(position: CGPoint) {
     unsafe {
         let event = CGEventCreateMouseEvent(ptr::null(), event_type, position, button);
         if !event.is_null() {
-            CGEventSetIntegerValueField(event, K_CG_EVENT_SOURCE_USER_DATA, SELF_INJECTED_TAG);
+            configure_mouse_event(event, input_flags);
             CGEventPost(K_CG_HID_EVENT_TAP, event);
             CFRelease(event as *const c_void);
         }
@@ -630,11 +642,12 @@ fn post_mouse_button_event(
     event_type: u32,
     pos: CGPoint,
     cg_button: u32,
+    input_flags: u64,
 ) {
     unsafe {
         let event = CGEventCreateMouseEvent(ptr::null(), event_type, pos, cg_button);
         if !event.is_null() {
-            CGEventSetIntegerValueField(event, K_CG_EVENT_SOURCE_USER_DATA, SELF_INJECTED_TAG);
+            configure_mouse_event(event, input_flags);
             if proxy.is_null() {
                 CGEventPost(K_CG_HID_EVENT_TAP, event);
             } else {
@@ -646,22 +659,36 @@ fn post_mouse_button_event(
 }
 
 /// Emit a mouse click (down + up) at the current cursor position.
-fn emit_mouse_click(proxy: CGEventTapProxy, button: yorling_engine::engine::MouseButton) {
+fn emit_mouse_click(
+    proxy: CGEventTapProxy,
+    button: yorling_engine::engine::MouseButton,
+    input_flags: u64,
+) {
     let pos = get_cursor_position();
     let (down_type, up_type, cg_button) = mouse_button_event_types(button);
-    post_mouse_button_event(proxy, down_type, pos, cg_button);
-    post_mouse_button_event(proxy, up_type, pos, cg_button);
+    post_mouse_button_event(proxy, down_type, pos, cg_button, input_flags);
+    post_mouse_button_event(proxy, up_type, pos, cg_button, input_flags);
 }
 
-fn hold_mouse_button(proxy: CGEventTapProxy, button: yorling_engine::engine::MouseButton) {
+fn hold_mouse_button(
+    proxy: CGEventTapProxy,
+    button: yorling_engine::engine::MouseButton,
+    input_flags: u64,
+) {
     let (down_type, _, cg_button) = mouse_button_event_types(button);
     HELD_MOUSE_BUTTON.store((cg_button + 1) as u8, Ordering::Relaxed);
-    post_mouse_button_event(proxy, down_type, get_cursor_position(), cg_button);
+    post_mouse_button_event(
+        proxy,
+        down_type,
+        get_cursor_position(),
+        cg_button,
+        input_flags,
+    );
 }
 
 /// Release the keyboard-held button, if any. Idempotent so every mode-exit
 /// path can call it without double-posting.
-fn release_held_mouse_button(proxy: CGEventTapProxy) {
+fn release_held_mouse_button(proxy: CGEventTapProxy, input_flags: u64) {
     use yorling_engine::engine::MouseButton;
     let held = HELD_MOUSE_BUTTON.swap(0, Ordering::Relaxed);
     if held == 0 {
@@ -673,12 +700,18 @@ fn release_held_mouse_button(proxy: CGEventTapProxy) {
         _ => MouseButton::Back,
     };
     let (_, up_type, cg_button) = mouse_button_event_types(button);
-    post_mouse_button_event(proxy, up_type, get_cursor_position(), cg_button);
+    post_mouse_button_event(
+        proxy,
+        up_type,
+        get_cursor_position(),
+        cg_button,
+        input_flags,
+    );
 }
 
 /// Emit a mouse scroll wheel event with the given line delta.
 /// Positive = scroll up (page goes up), negative = scroll down (page goes down).
-fn emit_mouse_scroll(proxy: CGEventTapProxy, lines: i32) {
+fn emit_mouse_scroll(proxy: CGEventTapProxy, lines: i32, input_flags: u64) {
     unsafe {
         let event = CGEventCreate(ptr::null());
         if event.is_null() {
@@ -686,7 +719,7 @@ fn emit_mouse_scroll(proxy: CGEventTapProxy, lines: i32) {
         }
         CGEventSetType(event, K_CG_EVENT_SCROLL_WHEEL);
         CGEventSetIntegerValueField(event, K_CG_SCROLL_WHEEL_EVENT_DELTA_AXIS_1, lines as i64);
-        CGEventSetIntegerValueField(event, K_CG_EVENT_SOURCE_USER_DATA, SELF_INJECTED_TAG);
+        configure_mouse_event(event, input_flags);
         CGEventTapPostEvent(proxy, event);
         CFRelease(event as *const c_void);
     }
@@ -712,7 +745,7 @@ unsafe fn handle_tapped_event(
         let data = unsafe { &*(user_info as *const (Arc<TapContext>, Arc<AtomicU64>)) };
         let context = &data.0;
         context.mouse_motion.stop_motion();
-        release_held_mouse_button(proxy);
+        release_held_mouse_button(proxy, context.mouse_motion.input_flags());
         let (releases, bracket_action) = context
             .engine
             .lock()
@@ -861,6 +894,12 @@ unsafe fn handle_tapped_event(
             Err(_) => return event, // Poisoned mutex — pass through
         };
         let was_mouse_mode_active = engine.is_mouse_mode_active();
+        // A plain Tab is required to enter mouse mode; any modifier transition
+        // exits it. Freeze the entry flags for the whole session, so stale
+        // flags on later swallowed keys cannot contaminate mouse output.
+        if !was_mouse_mode_active {
+            context.mouse_motion.set_input_flags(flags);
+        }
         let action = engine.process_key(keycode, key_down, is_autorepeat, flags);
         let mouse_mode_exited = was_mouse_mode_active && !engine.is_mouse_mode_active();
         (action, mouse_mode_exited)
@@ -868,11 +907,15 @@ unsafe fn handle_tapped_event(
 
     if mouse_mode_exited {
         context.mouse_motion.stop_motion();
-        release_held_mouse_button(proxy);
+        release_held_mouse_button(proxy, context.mouse_motion.input_flags());
     }
 
     match action {
         EngineAction::PassThrough => event,
+        EngineAction::PassThroughAndSystem(sys_action) => {
+            dispatch_system_action(context, proxy, sys_action);
+            event
+        }
         EngineAction::Suppress => ptr::null_mut(),
         EngineAction::Emit(keys) => emit_keys_from_tap(proxy, event, &keys, flags),
         EngineAction::EmitAndSystem(keys, sys_action) => {
@@ -898,13 +941,13 @@ fn dispatch_system_action(context: &TapContext, proxy: CGEventTapProxy, action: 
                 .update_intent(MouseMoveIntent { x, y, fast });
         }
         SystemAction::MouseClick { button } => {
-            emit_mouse_click(proxy, button);
+            emit_mouse_click(proxy, button, context.mouse_motion.input_flags());
         }
         SystemAction::MouseButtonHold { button, pressed } => {
             if pressed {
-                hold_mouse_button(proxy, button);
+                hold_mouse_button(proxy, button, context.mouse_motion.input_flags());
             } else {
-                release_held_mouse_button(proxy);
+                release_held_mouse_button(proxy, context.mouse_motion.input_flags());
             }
         }
         SystemAction::MouseScroll { direction } => {
@@ -912,12 +955,12 @@ fn dispatch_system_action(context: &TapContext, proxy: CGEventTapProxy, action: 
                 MouseScrollDirection::Up => MOUSE_SCROLL_LINES,
                 MouseScrollDirection::Down => -MOUSE_SCROLL_LINES,
             };
-            emit_mouse_scroll(proxy, lines);
+            emit_mouse_scroll(proxy, lines, context.mouse_motion.input_flags());
         }
         SystemAction::MouseModeChanged { active } => {
             if !active {
                 context.mouse_motion.stop_motion();
-                release_held_mouse_button(proxy);
+                release_held_mouse_button(proxy, context.mouse_motion.input_flags());
             }
             forward_system_action(context, SystemAction::MouseModeChanged { active });
         }
@@ -1070,6 +1113,121 @@ fn dispatch_music_key_event(context: &TapContext, code: &'static str, key_down: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn synthetic_mouse_events_use_input_flags_not_the_event_source_flags() {
+        for event_type in [
+            K_CG_EVENT_MOUSE_MOVED,
+            K_CG_EVENT_LEFT_MOUSE_DOWN,
+            K_CG_EVENT_SCROLL_WHEEL,
+        ] {
+            let event = unsafe { CGEventCreate(ptr::null()) };
+            assert!(!event.is_null());
+            unsafe {
+                CGEventSetType(event, event_type);
+                CGEventSetFlags(event, core_keycode::FLAG_CONTROL | core_keycode::FLAG_SHIFT);
+            }
+            configure_mouse_event(event, 0);
+            unsafe {
+                assert_eq!(CGEventGetFlags(event), 0, "event type {event_type}");
+                assert_eq!(
+                    CGEventGetIntegerValueField(event, K_CG_EVENT_SOURCE_USER_DATA),
+                    SELF_INJECTED_TAG
+                );
+            }
+
+            // Actual keyboard modifiers are still passed on; unrelated event
+            // metadata should not leak from the keyboard event to the mouse.
+            configure_mouse_event(event, core_keycode::FLAG_SHIFT | 0x2000_0000);
+            unsafe {
+                assert_eq!(CGEventGetFlags(event), core_keycode::FLAG_SHIFT);
+                CFRelease(event.cast());
+            }
+        }
+    }
+
+    #[test]
+    fn incoming_keyboard_event_updates_the_mouse_modifier_snapshot() {
+        let interceptor = KeyboardInterceptor::new();
+        interceptor.context.enabled.store(true, Ordering::SeqCst);
+        let mut data = (
+            Arc::clone(&interceptor.context),
+            Arc::clone(&interceptor.event_count),
+        );
+        let event =
+            unsafe { CGEventCreateKeyboardEvent(ptr::null(), VirtualKeyCode::A as u16, true) };
+        assert!(!event.is_null());
+        unsafe {
+            CGEventSetFlags(event, core_keycode::FLAG_SHIFT);
+            assert_eq!(
+                event_tap_callback(
+                    ptr::null_mut(),
+                    K_CG_EVENT_KEY_DOWN,
+                    event,
+                    &mut data as *mut _ as *mut c_void
+                ),
+                event
+            );
+            assert_eq!(
+                interceptor.context.mouse_motion.input_flags(),
+                core_keycode::FLAG_SHIFT
+            );
+
+            CGEventSetFlags(event, 0);
+            assert_eq!(
+                event_tap_callback(
+                    ptr::null_mut(),
+                    K_CG_EVENT_KEY_DOWN,
+                    event,
+                    &mut data as *mut _ as *mut c_void
+                ),
+                event
+            );
+            assert_eq!(interceptor.context.mouse_motion.input_flags(), 0);
+            CFRelease(event.cast());
+        }
+    }
+
+    #[test]
+    fn mouse_session_does_not_adopt_stale_flags_from_later_layer_keys() {
+        let interceptor = KeyboardInterceptor::new();
+        interceptor.context.enabled.store(true, Ordering::SeqCst);
+        let mut data = (
+            Arc::clone(&interceptor.context),
+            Arc::clone(&interceptor.event_count),
+        );
+        unsafe {
+            let tab = CGEventCreateKeyboardEvent(ptr::null(), VirtualKeyCode::Tab as u16, true);
+            CGEventSetFlags(tab, 0);
+            assert!(
+                event_tap_callback(
+                    ptr::null_mut(),
+                    K_CG_EVENT_KEY_DOWN,
+                    tab,
+                    &mut data as *mut _ as *mut c_void
+                )
+                .is_null()
+            );
+            CFRelease(tab.cast());
+
+            let movement = CGEventCreateKeyboardEvent(ptr::null(), VirtualKeyCode::J as u16, true);
+            CGEventSetFlags(
+                movement,
+                core_keycode::FLAG_CONTROL | core_keycode::FLAG_SHIFT,
+            );
+            assert!(
+                event_tap_callback(
+                    ptr::null_mut(),
+                    K_CG_EVENT_KEY_DOWN,
+                    movement,
+                    &mut data as *mut _ as *mut c_void
+                )
+                .is_null()
+            );
+            assert_eq!(interceptor.context.mouse_motion.input_flags(), 0);
+            CFRelease(movement.cast());
+        }
+    }
 
     #[test]
     fn native_autorepeat_is_suppressed_for_screenshot_shortcut() {
@@ -1278,12 +1436,12 @@ mod tests {
     fn physical_mouse_down_resets_pending_hold_layer() {
         let interceptor = KeyboardInterceptor::new();
         interceptor.context.enabled.store(true, Ordering::SeqCst);
-        interceptor
-            .context
-            .engine
-            .lock()
-            .unwrap()
-            .process_key(VirtualKeyCode::Space as u16, true, false, 0);
+        interceptor.context.engine.lock().unwrap().process_key(
+            VirtualKeyCode::Space as u16,
+            true,
+            false,
+            0,
+        );
 
         let mut data = (
             Arc::clone(&interceptor.context),

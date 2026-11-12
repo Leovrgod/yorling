@@ -809,6 +809,10 @@ fn dispatch_engine_action(
 ) -> bool {
     match action {
         EngineAction::PassThrough => false,
+        EngineAction::PassThroughAndSystem(system_action) => {
+            dispatch_system_action(context, system_action);
+            false
+        }
         EngineAction::Suppress => true,
         EngineAction::Emit(keys) => {
             dispatch_synthetic_keys(context, keys, physical_flags);
@@ -862,9 +866,10 @@ fn desired_flags_for_synthetic_key(key: &SyntheticKey, physical_flags: u64) -> u
 fn release_held_mouse_button(context: &HookContext) {
     let button = context.held_mouse_button.lock().unwrap().take();
     if let Some(button) = button {
-        context
-            .mouse_actions
-            .dispatch(MouseCommand::ButtonHold { button, pressed: false });
+        context.mouse_actions.dispatch(MouseCommand::ButtonHold {
+            button,
+            pressed: false,
+        });
     }
 }
 
@@ -881,9 +886,10 @@ fn dispatch_system_action(context: &HookContext, action: SystemAction) {
         SystemAction::MouseButtonHold { button, pressed } => {
             if pressed {
                 *context.held_mouse_button.lock().unwrap() = Some(button);
-                context
-                    .mouse_actions
-                    .dispatch(MouseCommand::ButtonHold { button, pressed: true });
+                context.mouse_actions.dispatch(MouseCommand::ButtonHold {
+                    button,
+                    pressed: true,
+                });
             } else {
                 release_held_mouse_button(context);
             }

@@ -1,7 +1,10 @@
 //! Keyboard-driven cursor motion. Input updates replace one shared intent;
 //! they never enqueue frames for the worker to replay later.
 
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{
+    Arc, Condvar, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -218,6 +221,7 @@ impl MotionShared {
 pub(crate) struct MouseMotionController {
     shared: Arc<MotionShared>,
     worker: Mutex<Option<thread::JoinHandle<()>>>,
+    input_flags: Arc<AtomicU64>,
 }
 
 impl MouseMotionController {
@@ -225,11 +229,15 @@ impl MouseMotionController {
         Self {
             shared: Arc::new(MotionShared::default()),
             worker: Mutex::new(None),
+            input_flags: Arc::new(AtomicU64::new(0)),
         }
     }
 
     pub fn start(&self) {
-        self.start_with_output(NativeMouseOutput::default());
+        self.start_with_output(NativeMouseOutput {
+            input_flags: Arc::clone(&self.input_flags),
+            ..Default::default()
+        });
     }
 
     fn start_with_output(&self, output: impl MouseOutput + Send + 'static) {
@@ -264,6 +272,15 @@ impl MouseMotionController {
     pub fn stop_motion(&self) {
         self.update_intent(MouseMoveIntent::default());
     }
+
+    /// Modifier snapshot from before the mouse layer was entered.
+    pub fn set_input_flags(&self, flags: u64) {
+        self.input_flags.store(flags, Ordering::Relaxed);
+    }
+
+    pub fn input_flags(&self) -> u64 {
+        self.input_flags.load(Ordering::Relaxed)
+    }
 }
 
 impl Drop for MouseMotionController {
@@ -285,6 +302,7 @@ struct NativeMouseOutput {
     cursor: CursorMotionState,
     displays: Vec<DisplayBounds>,
     displays_updated: Option<Instant>,
+    input_flags: Arc<AtomicU64>,
 }
 
 impl MouseOutput for NativeMouseOutput {
@@ -328,7 +346,7 @@ impl MouseOutput for NativeMouseOutput {
             let position = self
                 .cursor
                 .next_position(dx, dy, &self.displays, get_cursor_position);
-            emit_mouse_move_to(position);
+            emit_mouse_move_to(position, self.input_flags.load(Ordering::Relaxed));
         });
     }
 }
